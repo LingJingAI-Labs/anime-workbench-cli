@@ -518,7 +518,7 @@ async function uploadAssetLibraryFile(filePath, options = {}) {
     }));
   const currentGroupId = trimToNull(options.currentGroupId) ?? await resolveCurrentGroupId();
   if (!currentGroupId) {
-    throw new Error('未识别当前团队 groupId，无法上传火山资产。请先确认 AWB 登录状态正常。');
+    throw new Error('未识别当前团队 groupId，无法上传主体素材。请先确认 AWB 登录状态正常。');
   }
   const secret = await apiFetch('/api/anime/workbench/TencentCloud/getSecret', {
     body: {
@@ -562,7 +562,7 @@ async function uploadAssetLibraryFile(filePath, options = {}) {
     body: buffer,
   });
   if (!uploadResponse.ok) {
-    throw new Error(`火山资产 COS 上传失败: ${uploadResponse.status} ${uploadResponse.statusText}`);
+    throw new Error(`主体素材文件上传失败: ${uploadResponse.status} ${uploadResponse.statusText}`);
   }
   return {
     filePath: absolutePath,
@@ -598,7 +598,7 @@ async function ensureAssetGroupForSubject(kwargs) {
   const groupName = buildSubjectGroupName(kwargs);
   const description =
     trimToNull(kwargs.description) ??
-    `角色 ${trimToNull(kwargs.name) ?? groupName} [${trimToNull(kwargs.stateKey) ?? 'default'}] 的火山素材组合`;
+    `角色 ${trimToNull(kwargs.name) ?? groupName} [${trimToNull(kwargs.stateKey) ?? 'default'}] 的主体素材组`;
   const projectName = trimToNull(kwargs.projectName) ?? 'default';
   const existingRows = await listAssetGroups({ name: groupName, pageNumber: 1, pageSize: 20 }).catch(() => []);
   const existing = existingRows.find((item) => trimToNull(item?.name) === groupName) ?? null;
@@ -649,7 +649,7 @@ function rewriteSubjectUploadError(message, context = {}) {
   const text = String(message ?? '').trim();
   if (/NotFound\.group_id/i.test(text)) {
     return [
-      '火山资产注册接口当前拒绝了这个素材组。',
+      '素材资产注册接口当前拒绝了这个素材组。',
       `assetGroupId=${context.assetGroupId ?? 'unknown'}`,
       `currentGroupId=${context.currentGroupId ?? 'unknown'}`,
       `assetPath=${context.assetPath ?? 'unknown'}`,
@@ -676,7 +676,7 @@ async function previewSubjectUpload(kwargs) {
       stateKey: trimToNull(kwargs.stateKey) ?? 'default',
       description:
         trimToNull(kwargs.description) ??
-        `角色 ${trimToNull(kwargs.name) ?? buildSubjectGroupName(kwargs)} [${stateKey}] 的火山素材组合`,
+        `角色 ${trimToNull(kwargs.name) ?? buildSubjectGroupName(kwargs)} [${stateKey}] 的主体素材组`,
       assets: assetSpecs.map((item) => ({
         label: item.label,
         assetName: buildSubjectAssetDisplayName(kwargs.name, stateKey, item.label),
@@ -706,11 +706,11 @@ async function uploadSubjectAssets(kwargs) {
   if (!primarySpec?.file && !primarySpec?.url) {
     throw new Error('缺少主参考图。请传 `--primaryFile` 或 `--primaryUrl`。');
   }
-  printRuntimeNote(['[AWB] 正在准备火山素材组并上传真人资产...']);
+  printRuntimeNote(['[AWB] 正在准备主体素材组并上传主体图片...']);
   const group = await ensureAssetGroupForSubject(kwargs);
   const currentGroupId = await resolveCurrentGroupId();
   if (!group.groupId) {
-    throw new Error('创建或查询火山素材组失败，未拿到 groupId。');
+    throw new Error('创建或查询主体素材组失败，未拿到 groupId。');
   }
   const result = {
     name,
@@ -744,7 +744,7 @@ async function uploadSubjectAssets(kwargs) {
     }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `注册火山资产失败: ${spec.label} -> ${assetPath} (${rewriteSubjectUploadError(message, {
+        `注册主体素材失败: ${spec.label} -> ${assetPath} (${rewriteSubjectUploadError(message, {
           assetGroupId: group.groupId,
           currentGroupId,
           assetPath,
@@ -770,7 +770,7 @@ async function uploadSubjectAssets(kwargs) {
   }
 
   if (!result.subjectId) {
-    throw new Error('火山素材上传完成，但没有拿到 subjectId。请检查主参考图是否创建成功。');
+    throw new Error('主体素材上传完成，但没有拿到 subjectId。请检查主参考图是否创建成功。');
   }
   result.nextRefSubject = `${name}=${result.subjectId}`;
   result.raw = JSON.stringify({
@@ -2068,14 +2068,52 @@ function normalizeCodeKey(value) {
   return String(value ?? '').trim().toUpperCase();
 }
 
-async function fetchModelRowsByTaskType(taskType, taskPrompt = '') {
+function normalizeViewerPermission(value) {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
+function parseModelDisplayScopes(value) {
+  return String(value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isInternalOnlyModel(displayScopes = []) {
+  return displayScopes.length === 1 && displayScopes[0] === '1';
+}
+
+function isModelVisibleForPermission(displayScopes = [], viewerPermission = null) {
+  if (!displayScopes.length) return true;
+  const normalizedPermission = normalizeViewerPermission(viewerPermission);
+  if (normalizedPermission) {
+    return displayScopes.includes(normalizedPermission);
+  }
+  return !isInternalOnlyModel(displayScopes);
+}
+
+async function resolveViewerPermission(kwargs = {}) {
+  const explicitPermission = normalizeViewerPermission(kwargs.viewerPermission ?? kwargs.permission);
+  if (explicitPermission) return explicitPermission;
+  const state = await loadState().catch(() => ({}));
+  const cachedPermission = normalizeViewerPermission(state?.currentPermission ?? state?.currentUserPermission);
+  if (cachedPermission) return cachedPermission;
+  const auth = await loadAuth().catch(() => null);
+  const authPermission = normalizeViewerPermission(auth?.permission);
+  if (authPermission) return authPermission;
+  const me = await currentUserSummary().catch(() => null);
+  return normalizeViewerPermission(me?.permission);
+}
+
+async function fetchModelRowsByTaskType(taskType, taskPrompt = '', viewerPermission = null) {
   const payload = await apiFetch(`/api/resource/model/list/usage/${taskType}`, {
     body: { taskPrompt },
   }).catch(async () => apiFetch('/api/material/creation/model/listIgnoreDelete', {
     method: 'GET',
     query: { taskType: taskType === 'VIDEO_CREATE' ? 'VIDEO_GROUP' : taskType },
   }));
-  return normalizeModelRows(payload);
+  return filterModelRows(normalizeModelRows(payload), { viewerPermission });
 }
 
 async function fetchRawModelDefinitionsByTaskType(taskType, taskPrompt = '') {
@@ -2112,32 +2150,42 @@ async function resolveModelSelection(kind, kwargs = {}) {
   const rawModelCode = String(kwargs.modelCode ?? '').trim();
   const rawModelGroupCode = String(kwargs.modelGroupCode ?? '').trim();
 
-  if (rawModelCode && rawModelGroupCode) {
-    return {
-      modelCode: rawModelCode,
-      modelGroupCode: rawModelGroupCode,
-      kind: kind === 'generic' ? inferModelKind(rawModelCode, rawModelGroupCode) : kind,
-    };
-  }
-
   if (!rawModelCode && !rawModelGroupCode) {
     throw new Error('缺少模型标识：至少提供 `--modelGroupCode`；也可提供 `--modelCode` 后再由 CLI 帮你定位可选分组。');
   }
 
   const inferredKind = kind === 'generic' ? inferModelKind(rawModelCode, rawModelGroupCode) : kind;
+  const viewerPermission = await resolveViewerPermission(kwargs);
   const taskTypes =
     inferredKind === 'generic'
       ? ['IMAGE_CREATE', 'VIDEO_CREATE']
       : [normalizeTaskTypeFromKind(inferredKind)];
 
-  const rows = (await Promise.all(taskTypes.map((taskType) => fetchModelRowsByTaskType(taskType, ''))))
+  const rows = (await Promise.all(taskTypes.map((taskType) => fetchModelRowsByTaskType(taskType, '', viewerPermission))))
     .flat()
     .filter((item) => item?.modelCode && item?.modelGroupCode);
+
+  if (rawModelCode && rawModelGroupCode) {
+    const match = rows.find(
+      (item) =>
+        normalizeCodeKey(item.modelGroupCode) === normalizeCodeKey(rawModelGroupCode) &&
+        normalizeCodeKey(item.modelCode) === normalizeCodeKey(rawModelCode),
+    );
+    if (!match) {
+      throw new Error(`当前账号下未找到对应的模型: ${rawModelGroupCode}。可先执行 \`opencli awb image-models\` 或 \`opencli awb video-models\` 查看当前账号可用模型。`);
+    }
+    return {
+      modelCode: match.modelCode,
+      modelGroupCode: match.modelGroupCode,
+      modelName: match.modelName ?? null,
+      kind: inferredKind === 'generic' ? inferModelKind(match.modelCode, match.modelGroupCode) : inferredKind,
+    };
+  }
 
   if (rawModelGroupCode) {
     const match = rows.find((item) => normalizeCodeKey(item.modelGroupCode) === normalizeCodeKey(rawModelGroupCode));
     if (!match) {
-      throw new Error(`未找到对应的 modelGroupCode: ${rawModelGroupCode}。可先执行 \`opencli awb image-models\` 或 \`opencli awb video-models\` 查看。`);
+      throw new Error(`当前账号下未找到对应的 modelGroupCode: ${rawModelGroupCode}。可先执行 \`opencli awb image-models\` 或 \`opencli awb video-models\` 查看。`);
     }
     return {
       modelCode: match.modelCode,
@@ -2165,12 +2213,12 @@ async function resolveModelSelection(kind, kwargs = {}) {
     if (fuzzyMatches.length > 1) {
       throw new Error([
         `你传入的 \`modelCode\` 更像是模型族名或前缀：${rawModelCode}`,
-        '该模型存在多个可选分组，请补充 `--modelGroupCode`。',
+        '当前账号下该模型存在多个可选分组，请补充 `--modelGroupCode`。',
         '可选分组:',
         formatModelGroupChoices(fuzzyMatches),
       ].join('\n'));
     }
-    throw new Error(`未找到对应的 modelCode: ${rawModelCode}。如果你记的是模型名，建议先执行 \`opencli awb image-models --model "${rawModelCode}"\` 或直接改传 \`--modelGroupCode\`。`);
+    throw new Error(`当前账号下未找到对应的 modelCode: ${rawModelCode}。如果你记的是模型名，建议先执行 \`opencli awb image-models --model "${rawModelCode}"\` 或直接改传 \`--modelGroupCode\`。`);
   }
   if (matches.length === 1) {
     const match = matches[0];
@@ -2656,6 +2704,7 @@ function normalizeModelRows(payload) {
   const list = firstArray(payload);
   return list.map((item) => {
     const ext = parseStructuredValue(item?.modelExtInfo) ?? {};
+    const displayScopes = parseModelDisplayScopes(item?.display);
     const modelCode = item?.modelCode ?? item?.code ?? item?.value ?? null;
     const modelGroupCode =
       item?.modelGroupCode ??
@@ -2709,6 +2758,7 @@ function normalizeModelRows(payload) {
       supportsPromptOnly,
       featureSummary,
       feeCalcType: item?.feeCalcType ?? item?.feeType ?? null,
+      displayScope: displayScopes.join(','),
       paramKeys: paramDefs.map((option) => option.paramKey).filter(Boolean).join(','),
       模型: item?.modelName ?? item?.name ?? item?.label ?? null,
       提供方: item?.provider ?? item?.vendor ?? item?.supplier ?? item?.componyName ?? null,
@@ -2754,7 +2804,12 @@ function buildModelPreviewCommand(kind, modelRow) {
 function filterModelRows(rows, kwargs = {}) {
   const keyword = String(kwargs.model ?? kwargs.keyword ?? '').trim().toLowerCase();
   const provider = String(kwargs.provider ?? '').trim().toLowerCase();
+  const viewerPermission = normalizeViewerPermission(kwargs.viewerPermission ?? kwargs.permission);
   return rows.filter((item) => {
+    const displayScopes = parseModelDisplayScopes(item?.displayScope ?? item?.display ?? '');
+    if (!isModelVisibleForPermission(displayScopes, viewerPermission)) {
+      return false;
+    }
     if (provider && !String(item?.provider ?? '').toLowerCase().includes(provider)) {
       return false;
     }
@@ -2889,6 +2944,7 @@ async function currentUserSummary() {
   await saveState({
     currentUserId: summary.userId,
     currentUserName: summary.userName,
+    currentPermission: summary.permission,
     currentGroupId: summary.currentGroupId,
     currentGroupName: summary.currentGroupName,
     currentProjectGroupNo: summary.currentProjectGroupNo,
@@ -5466,6 +5522,7 @@ cli({
     '成功率',
   ],
   func: async (_page, kwargs) => {
+    const viewerPermission = await resolveViewerPermission(kwargs);
     const source = kwargs.source || 'usage';
     const payload =
       source === 'usage'
@@ -5476,7 +5533,7 @@ cli({
             method: 'GET',
             query: { taskType: 'IMAGE_CREATE' },
           });
-    const rows = filterModelRows(normalizeModelRows(payload), kwargs);
+    const rows = filterModelRows(normalizeModelRows(payload), { ...kwargs, viewerPermission });
     printModelListHint('image', rows);
     return rows;
   },
@@ -5511,6 +5568,7 @@ cli({
     '成功率',
   ],
   func: async (_page, kwargs) => {
+    const viewerPermission = await resolveViewerPermission(kwargs);
     const source = kwargs.source || 'usage';
     const payload =
       source === 'usage'
@@ -5521,7 +5579,7 @@ cli({
             method: 'GET',
             query: { taskType: 'VIDEO_GROUP' },
           });
-    const rows = filterModelRows(normalizeModelRows(payload), kwargs);
+    const rows = filterModelRows(normalizeModelRows(payload), { ...kwargs, viewerPermission });
     printModelListHint('video', rows);
     return rows;
   },
@@ -5578,17 +5636,17 @@ cli({
 cli({
   site: SITE,
   name: 'subject-upload',
-  description: commandHelp('上传真人/角色图片到火山素材组（加白），返回可用于 Seedance 的 subjectId', {
+  description: commandHelp('上传真人/角色图片到主体素材组，返回可复用的 subjectId', {
     quickStart: [
       '1. 用 `--primaryFile` 传主参考图；如果有正/侧/背面可一并补齐',
       '2. 成功后记下返回的 `subjectId` 或 `nextRefSubject`',
-      '3. 在 Seedance 用 `--refSubjects "角色名=subjectId"` 引用，而不是继续直接传原图',
+      '3. 后续在支持主体引用的视频模型里，用 `--refSubjects "角色名=subjectId"` 引用，而不是继续直接传原图',
     ],
     examples: [
       'opencli awb subject-upload --name 小莉 --primaryFile ./three-view.png --faceFile ./front.png --sideFile ./side.png --backFile ./back.png --projectName demo --dryRun true',
       'opencli awb subject-upload --name 小莉 --primaryFile ./three-view.png --projectName demo -f json',
     ],
-    hint: '这条命令对应你说的“上传火山=加白”。它会按素材组逻辑把图片注册进火山资产库，并把主参考图的资产 ID 作为 `subjectId` 返回。后续 Seedance 真人参考优先用 `--refSubjects`，比直接传原始图片更稳。',
+    hint: '这条命令会按素材组逻辑把图片注册成可复用主体素材，并把主参考图的资产 ID 作为 `subjectId` 返回。后续如需主体引用，优先传 `--refSubjects`，比继续直接传原始图片更稳。',
     dryRun: true,
   }),
   browser: false,
@@ -5864,10 +5922,10 @@ cli({
   description: commandHelp('高级预算：估算生视频积分', {
     examples: [
       'opencli awb video-fee --modelGroupCode JiMeng3Pro_VideoCreate_Group --frameText "镜头推进" --quality 720 --generatedTime 5 --ratio 16:9',
-      'opencli awb video-fee --modelGroupCode JiMeng_Seedance_2_VideoCreate_Group --prompt "@角色A 在雨夜奔跑" --refImageFiles "角色A=./char.webp" --quality 720 --generatedTime 5 --ratio 16:9',
+      'opencli awb video-fee --modelGroupCode <g> --prompt "@角色A 在雨夜奔跑" --refImageFiles "角色A=./char.webp" --quality 720 --generatedTime 5 --ratio 16:9',
       'opencli awb video-fee --modelGroupCode KeLing3_VideoCreate_Group --storyboardPrompts "镜头1：城市远景||镜头2：人物走近镜头" --quality 720 --generatedTime 5 --ratio 16:9',
     ],
-    hint: '主流程通常直接用 `video-create`；这里只在脚本预算、批量预算或 agent 预判时单独估算。部分模型支持纯 prompt，无需首帧或参考。两种主要模式：首尾帧模式用 `frame*` / `framesJson`；参考生视频模式用 `refImage*` / `refVideo*` / `refAudio*` / `refSubjects`。故事板模式可直接用 `--storyboardPrompts`；只有更底层的特殊结构才需要 `--promptParamsJson`。Seedance 2.0 推荐直接用参考生视频；真人资产已火山加白时优先传 `--refSubjects "角色=asset-..."`。',
+    hint: '主流程通常直接用 `video-create`；这里只在脚本预算、批量预算或 agent 预判时单独估算。部分模型支持纯 prompt，无需首帧或参考。两种主要模式：首尾帧模式用 `frame*` / `framesJson`；参考生视频模式用 `refImage*` / `refVideo*` / `refAudio*` / `refSubjects`。故事板模式可直接用 `--storyboardPrompts`；只有更底层的特殊结构才需要 `--promptParamsJson`。如果模型支持主体引用，优先传 `--refSubjects "角色=asset-..."`。',
   }),
   browser: false,
   args: [
@@ -5896,7 +5954,7 @@ cli({
     { name: 'refAudioFiles', help: '[参考生视频模式] 命名音频文件。格式: 角色A=./voice.mp3；默认会绑定到同名图片/主体参考。' },
     { name: 'refAudioUrls', help: '[参考生视频模式] 命名音频地址。格式: 角色A=/material/... 或 https://...' },
     { name: 'refAudiosJson', help: '[参考生视频模式] 高级音频参考 JSON。支持 name / displayName / file / url / bindTo。' },
-    { name: 'refSubjects', help: '[参考生视频模式] 命名主体引用。格式: 角色A=asset_xxx 或 actors.json 里的 subject_id；提示词里可用 @角色A 引用。真人资产已火山加白时优先用这个。' },
+    { name: 'refSubjects', help: '[参考生视频模式] 命名主体引用。格式: 角色A=asset_xxx 或 actors.json 里的 subject_id；提示词里可用 @角色A 引用。已有 subjectId 时优先用这个。' },
     { name: 'refSubjectsJson', help: '[参考生视频模式] 高级主体参考 JSON。支持 name / displayName / elementId / desc。' },
     { name: 'storyboardPrompts', help: '[故事板模式] 分镜提示词。支持 JSON 数组或 `||` 分隔字符串。示例: "镜头1：城市远景||镜头2：人物走近镜头"' },
     { name: 'framesJson', help: '高级用法：直接覆盖整个 frames 数组 JSON；只有做多帧精细控制时再用' },
@@ -5922,7 +5980,7 @@ cli({
     commonArgs: [
       '`--prompt`: 部分模型支持纯 prompt 直出，无需首帧或参考图',
       '`--frameText` 或 `--frameFile`: 首尾帧模式的最常用输入',
-      '`--refImageFiles` / `--refSubjects`: 参考生视频模式的最常用输入，提示词里可写 `@角色A`；真人资产优先用已经火山加白过的 `--refSubjects`',
+      '`--refImageFiles` / `--refSubjects`: 参考生视频模式的最常用输入，提示词里可写 `@角色A`；已有主体素材时优先用 `--refSubjects`',
       '`--quality`: 清晰度档位，例如 `720` / `1080`',
       '`--ratio`: 视频比例，例如 `16:9` / `9:16`',
       '`--generatedTime`: 目标视频时长秒数，例如 `5` / `10`',
@@ -5940,11 +5998,11 @@ cli({
       'opencli awb video-create --modelGroupCode <g> --frameText "镜头推进" --quality 720 --generatedTime 5 --ratio 16:9 --dryRun true',
       'opencli awb video-create --modelGroupCode <g> --frameFile ./frame.webp --quality 720 --generatedTime 5 --ratio 16:9 --waitSeconds 180',
       'opencli awb video-create --modelGroupCode <g> --frameFile ./frame.webp --tailFrameFile ./tail.webp --quality 720 --generatedTime 5 --ratio 16:9',
-      'opencli awb video-create --modelGroupCode JiMeng_Seedance_2_VideoCreate_Group --prompt "@角色A 在雨夜奔跑" --refImageFiles "角色A=./char.webp" --quality 720 --generatedTime 5 --ratio 16:9 --dryRun true',
+      'opencli awb video-create --modelGroupCode <g> --prompt "@角色A 在雨夜奔跑" --refImageFiles "角色A=./char.webp" --quality 720 --generatedTime 5 --ratio 16:9 --dryRun true',
       'opencli awb video-create --modelGroupCode KeLing3_VideoCreate_Group --storyboardPrompts "镜头1：城市远景||镜头2：人物走近镜头" --quality 720 --generatedTime 5 --ratio 16:9 --dryRun true',
-      'opencli awb video-create --modelGroupCode JiMeng_Seedance_2_VideoCreate_Group --prompt "@角色A 对镜说话" --refSubjects "角色A=asset-20260322213257-rcrvb" --refAudioFiles "角色A=./voice.mp3" --quality 720 --generatedTime 5 --ratio 9:16',
+      'opencli awb video-create --modelGroupCode <g> --prompt "@角色A 对镜说话" --refSubjects "角色A=asset-xxxxxxxx" --refAudioFiles "角色A=./voice.mp3" --quality 720 --generatedTime 5 --ratio 9:16',
     ],
-    hint: '真正提交前会先显示预计积分、当前余额和提交后预计剩余；如果想一步等到结果，追加 `--waitSeconds 180`。部分模型支持纯 prompt，无需首帧或参考。Seedance 2.0 的参考生视频请不要再混用 `frame*` 与 `ref*`。故事板模式现在可直接用 `--storyboardPrompts`；只有更底层的特殊结构才需要 `--promptParamsJson`。真人资产如果已经走过火山加白，优先传 `--refSubjects`。',
+    hint: '真正提交前会先显示预计积分、当前余额和提交后预计剩余；如果想一步等到结果，追加 `--waitSeconds 180`。部分模型支持纯 prompt，无需首帧或参考。参考生视频模式请不要再混用 `frame*` 与 `ref*`。故事板模式现在可直接用 `--storyboardPrompts`；只有更底层的特殊结构才需要 `--promptParamsJson`。如已拿到主体素材 ID，优先传 `--refSubjects`。',
     dryRun: true,
   }),
   browser: false,
@@ -5974,7 +6032,7 @@ cli({
     { name: 'refAudioFiles', help: '[参考生视频模式] 命名音频文件。格式: 角色A=./voice.mp3；默认会绑定到同名图片/主体参考。' },
     { name: 'refAudioUrls', help: '[参考生视频模式] 命名音频地址。格式: 角色A=/material/... 或 https://...' },
     { name: 'refAudiosJson', help: '[参考生视频模式] 高级音频参考 JSON。支持 name / displayName / file / url / bindTo。' },
-    { name: 'refSubjects', help: '[参考生视频模式] 命名主体引用。格式: 角色A=asset_xxx 或 actors.json 里的 subject_id；提示词里可用 @角色A 引用。真人资产已火山加白时优先用这个。' },
+    { name: 'refSubjects', help: '[参考生视频模式] 命名主体引用。格式: 角色A=asset_xxx 或 actors.json 里的 subject_id；提示词里可用 @角色A 引用。已有 subjectId 时优先用这个。' },
     { name: 'refSubjectsJson', help: '[参考生视频模式] 高级主体参考 JSON。支持 name / displayName / elementId / desc。' },
     { name: 'storyboardPrompts', help: '[故事板模式] 分镜提示词。支持 JSON 数组或 `||` 分隔字符串。示例: "镜头1：城市远景||镜头2：人物走近镜头"' },
     { name: 'framesJson', help: '高级用法：直接覆盖整个 frames 数组 JSON；只有做多帧精细控制时再用' },

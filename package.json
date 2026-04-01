@@ -1,7 +1,7 @@
 {
   "name": "opencli-plugin-awb",
   "version": "0.1.0",
-  "description": "Anime Workbench terminal plugin for opencli",
+  "description": "LingJing AI Anime Workbench platform CLI plugin for opencli",
   "license": "MIT",
   "type": "module",
   "repository": {

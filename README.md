@@ -1,102 +1,91 @@
 # opencli-plugin-awb
 
-Anime Workbench (`animeworkbench.lingjingai.cn`) terminal plugin for `opencli`.
+灵境AI Anime Workbench 平台 CLI 插件。  
+CLI plugin for the LingJing AI Anime Workbench platform.
 
-This plugin is terminal-only. It does not depend on opening the AWB web UI after installation.
+这个插件把 `animeworkbench.lingjingai.cn` 的常用能力带到终端里，适合在 shell、脚本和 agent 流程里直接调用。  
+This plugin brings common Anime Workbench workflows into the terminal for shell, scripting, and agent use.
 
-## Install
+## 安装 / Install
 
-Prerequisite:
+前置依赖 / Prerequisite:
 
 ```bash
 npm install -g @jackwener/opencli
 ```
 
-Install directly from GitHub after this repo is published:
+从 GitHub 安装 / Install from GitHub:
 
 ```bash
 npm install -g github:LingJingAI-Labs/opencli-plugin-awb
 ```
 
-Or:
+或 / Or:
 
 ```bash
 npm install -g git+https://github.com/LingJingAI-Labs/opencli-plugin-awb.git
 ```
 
-The package `postinstall` hook will copy the plugin into `~/.opencli/plugins/awb` and link the global `opencli` runtime automatically.
+安装完成后，`postinstall` 会自动把插件放到 `~/.opencli/plugins/awb`。  
+After installation, `postinstall` will place the plugin under `~/.opencli/plugins/awb`.
 
-Verify installation:
+验证安装 / Verify:
 
 ```bash
 opencli awb --help
 ```
 
-## Local Development
-
-Prerequisite:
-
-```bash
-npm install -g @jackwener/opencli
-```
-
-Install from the local repo:
+## 本地开发 / Local Development
 
 ```bash
 cd /Users/zheyong/Developer/opencli-plugin-awb
 npm install -g .
 ```
 
-Or refresh the local development install:
+或直接刷新本地插件安装 / Or refresh the local plugin install directly:
 
 ```bash
 node /Users/zheyong/Developer/opencli-plugin-awb/install.mjs
 ```
 
-## Login
+## 登录 / Login
 
-WeChat QR login in terminal:
+终端微信扫码登录 / WeChat QR login in terminal:
 
 ```bash
 opencli awb login-qr
 ```
 
-Only print the QR URL without waiting:
+只返回二维码链接，不等待 / Only print the QR URL without waiting:
 
 ```bash
 opencli awb login-qr --waitSeconds 0 -f json
 ```
 
-Phone login:
+手机验证码登录 / Phone login:
 
 ```bash
 opencli awb send-code --phone 13800138000 --captchaVerifyParam '<aliyun-captcha>'
 opencli awb phone-login --phone 13800138000 --code 123456
 ```
 
-First-time WeChat bind flow:
+## 团队与项目组 / Teams And Project Groups
 
-```bash
-opencli awb bind-phone --phone 13800138000 --code 123456
-```
-
-## Teams And Projects
-
-Inspect current account, team, and project group:
+查看当前账号、团队和项目组 / Inspect current account, team, and project group:
 
 ```bash
 opencli awb me -f json
 opencli awb points -f json
 ```
 
-Switch team:
+切换团队 / Switch team:
 
 ```bash
 opencli awb teams -f json
 opencli awb team-select --groupId <groupId> -f json
 ```
 
-Manage creation project groups:
+管理项目组 / Manage project groups:
 
 ```bash
 opencli awb project-groups -f json
@@ -106,119 +95,125 @@ opencli awb project-group-create --name "CLI Project" -f json
 opencli awb project-group-select --projectGroupNo <projectGroupNo> -f json
 ```
 
-## Points
+## 模型发现 / Model Discovery
+
+列出图片模型 / List image models:
 
 ```bash
-opencli awb point-packages -f json
-opencli awb point-records --pageNo 1 --pageSize 20 -f json
-opencli awb redeem --code XXXX-XXXX-XXXX-XXXX -f json
+opencli awb image-models
 ```
 
-## Models And Success Rate
-
-Image and video model lists include current success-rate fields from AWB:
+列出视频模型 / List video models:
 
 ```bash
-opencli awb image-models -f json
-opencli awb video-models -f json
+opencli awb video-models
 ```
 
-Returned rows include current capability summaries such as frame mode, reference mode, success rate, and special features like storyboards or audio switches.
-
-## Local Uploads
-
-Upload local files for later use in image or video creation:
+按名称过滤 / Filter by name:
 
 ```bash
-opencli awb upload-files --files ./ref.png -f json
-opencli awb upload-files --files ./first-frame.webp --sceneType material-video-create -f json
+opencli awb image-models --model "Nano Banana"
+opencli awb video-models --model "可灵 3.0"
 ```
 
-The command returns both AWB `backendPath` and signed `signedUrl`.
+查看某个模型的参数、约束和推荐命令 / Inspect model parameters, constraints, and recommended CLI usage:
 
-## Image Creation
+```bash
+opencli awb model-options --modelGroupCode <modelGroupCode>
+```
 
-Estimate fee:
+## 素材上传 / Uploads
+
+上传本地文件到素材桶 / Upload local files to the media bucket:
+
+```bash
+opencli awb upload-files --files ./ref.webp -f json
+opencli awb upload-files --files ./frame.webp --sceneType material-video-create -f json
+```
+
+返回值里会包含 `backendPath` 和 `signedUrl`。  
+The result includes both `backendPath` and `signedUrl`.
+
+## 图片生成 / Image Creation
+
+积分预估 / Estimate fee:
 
 ```bash
 opencli awb image-fee \
-  --modelCode JiMeng4_ImageCreate \
-  --modelGroupCode JiMeng4_ImageCreate_Group \
+  --modelGroupCode <modelGroupCode> \
   --prompt "一位赛博风格少女站在霓虹街头" \
-  --irefFiles ./ref.webp \
-  -f json
+  --quality 1K \
+  --ratio 16:9 \
+  --generateNum 1
 ```
 
-Create image task:
+正式创建 / Create image task:
 
 ```bash
 opencli awb image-create \
-  --modelCode JiMeng4_ImageCreate \
-  --modelGroupCode JiMeng4_ImageCreate_Group \
-  --projectGroupNo <projectGroupNo> \
+  --modelGroupCode <modelGroupCode> \
   --prompt "一位赛博风格少女站在霓虹街头" \
-  --crefFiles ./char.webp \
-  --srefFiles ./style.webp \
-  --irefFiles ./ref.webp \
-  -f json
+  --quality 1K \
+  --ratio 16:9 \
+  --generateNum 1 \
+  --dryRun true
 ```
 
-Batch create images from JSON, JSONL, or one prompt per line:
+Banana 系列多图参考 / Multi-reference for Banana-family models:
+
+```bash
+opencli awb image-create \
+  --modelGroupCode <modelGroupCode> \
+  --prompt "参考图里的角色在雨夜奔跑" \
+  --quality 1K \
+  --ratio 16:9 \
+  --generateNum 1 \
+  --irefFiles "./a.webp,./b.webp" \
+  --dryRun true
+```
+
+批量生图 / Batch image creation:
 
 ```bash
 opencli awb image-create-batch \
   --inputFile ./image-batch.json \
-  --modelCode JiMeng4_ImageCreate \
-  --modelGroupCode JiMeng4_ImageCreate_Group \
-  --projectGroupNo <projectGroupNo> \
+  --modelGroupCode <modelGroupCode> \
   --concurrency 2 \
-  -f json
+  --dryRun true -f json
 ```
 
-## Video Creation
+## 视频生成 / Video Creation
 
-Estimate fee with a local first frame:
-
-```bash
-opencli awb video-fee \
-  --modelCode JiMeng3_VideoCreate \
-  --modelGroupCode JiMeng3_VideoCreate_Group \
-  --frameText "镜头缓慢推进，少女在霓虹雨夜回头" \
-  --frameFile ./first-frame.webp \
-  -f json
-```
-
-Create video task:
+首尾帧模式 / Frame-based mode:
 
 ```bash
 opencli awb video-create \
-  --modelCode JiMeng3_VideoCreate \
-  --modelGroupCode JiMeng3_VideoCreate_Group \
-  --projectGroupNo <projectGroupNo> \
-  --frameText "镜头缓慢推进，少女在霓虹雨夜回头" \
+  --modelGroupCode <modelGroupCode> \
   --frameFile ./first-frame.webp \
   --tailFrameFile ./last-frame.webp \
-  --generatedTime 5 \
-  -f json
-```
-
-Storyboard mode:
-
-```bash
-opencli awb video-create \
-  --modelGroupCode KeLing3_VideoCreate_Group \
-  --storyboardPrompts "镜头1：城市远景||镜头2：人物走近镜头" \
   --quality 720 \
   --generatedTime 5 \
   --ratio 16:9 \
   --dryRun true
 ```
 
-Seedance 2.0 reference mode:
+纯提示词模式（仅部分模型） / Prompt-only mode (supported by some models only):
 
 ```bash
 opencli awb video-create \
-  --modelGroupCode JiMeng_Seedance_2_VideoCreate_Group \
+  --modelGroupCode <modelGroupCode> \
+  --prompt "雨夜街头，人物缓慢走向镜头，电影感" \
+  --quality 720 \
+  --generatedTime 5 \
+  --ratio 16:9 \
+  --dryRun true
+```
+
+参考生视频模式 / Reference-based video mode:
+
+```bash
+opencli awb video-create \
+  --modelGroupCode <modelGroupCode> \
   --prompt "@角色A 对镜说话" \
   --refImageFiles "角色A=./char.webp" \
   --refAudioFiles "角色A=./voice.mp3" \
@@ -228,30 +223,54 @@ opencli awb video-create \
   --dryRun true
 ```
 
-Batch create videos:
+故事板模式 / Storyboard mode:
+
+```bash
+opencli awb video-create \
+  --modelGroupCode <modelGroupCode> \
+  --storyboardPrompts "镜头1：城市远景||镜头2：人物走近镜头" \
+  --quality 720 \
+  --generatedTime 5 \
+  --ratio 16:9 \
+  --dryRun true
+```
+
+批量生视频 / Batch video creation:
 
 ```bash
 opencli awb video-create-batch \
   --inputFile ./video-batch.json \
-  --modelCode JiMeng3_VideoCreate \
-  --modelGroupCode JiMeng3_VideoCreate_Group \
-  --projectGroupNo <projectGroupNo> \
+  --modelGroupCode <modelGroupCode> \
   --concurrency 2 \
-  -f json
+  --dryRun true -f json
 ```
 
-## Task Status
+## 任务查询 / Task Status
 
-Query task feeds:
+查询任务流 / Query task feeds:
 
 ```bash
 opencli awb tasks --taskType IMAGE_CREATE -f json
 opencli awb tasks --taskType VIDEO_GROUP -f json
 ```
 
-Wait for a specific task:
+等待任务完成 / Wait for a specific task:
 
 ```bash
 opencli awb task-wait --taskId <taskId> --taskType IMAGE_CREATE -f json
 opencli awb task-wait --taskId <taskId> --taskType VIDEO_GROUP -f json
 ```
+
+## 说明 / Notes
+
+推荐流程 / Recommended workflow:
+
+```bash
+opencli awb video-models --model "可灵 3.0"
+opencli awb model-options --modelGroupCode <modelGroupCode>
+opencli awb video-create ... --dryRun true
+opencli awb video-create ...
+```
+
+`dryRun` 会构造真实请求并调用积分估算接口，但不会真正提交创作任务。  
+`dryRun` builds the real request and calls the fee-estimation endpoint, but does not submit the final creation task.
