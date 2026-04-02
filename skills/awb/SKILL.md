@@ -1,0 +1,51 @@
+# AWB Skill
+
+适用对象：
+
+- 独立 CLI：`awb`
+- opencli 插件：`opencli awb`
+
+优先命令：
+
+```bash
+AWB_CMD=awb
+command -v "$AWB_CMD" >/dev/null 2>&1 || AWB_CMD="opencli awb"
+```
+
+在调用任何创作命令前，先做这三步：
+
+1. `"$AWB_CMD" auth-status -f json`
+2. `"$AWB_CMD" image-models` 或 `"$AWB_CMD" video-models`
+3. `"$AWB_CMD" model-options --modelGroupCode <g>`
+
+高频能力：
+
+- 账号与项目组：见 `capabilities/auth-and-account.md`
+- 模型选择：见 `capabilities/model-discovery.md`
+- 生图：见 `capabilities/create-image.md`
+- 生视频：见 `capabilities/create-video.md`
+- 主体素材与上传：见 `capabilities/upload-and-assets.md`
+- 任务查询：见 `capabilities/task-management.md`
+- 积分与开票：见 `capabilities/billing.md`
+
+高频流程：
+
+- 文生图：见 `workflows/text-to-image-pipeline.md`
+- 图生视频：见 `workflows/image-to-video-pipeline.md`
+- 完整生产流：见 `workflows/full-production-pipeline.md`
+- 批量创作：见 `workflows/batch-creation.md`
+
+更新与兼容：
+
+- Skill 版本：`VERSION`
+- 兼容信息：`compat.json`
+- 更新检查：`scripts/check-update.sh`
+- 更新执行：`scripts/update.sh`
+- 命令探测：`scripts/resolve-awb-cmd.sh`
+
+规则：
+
+- 默认优先用 `awb`
+- 如果机器上没有 `awb`，再退回 `opencli awb`
+- JSON 输出统一优先 `-f json`
+- 真正提交前，优先先跑 `--dryRun true`

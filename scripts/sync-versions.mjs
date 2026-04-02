@@ -15,6 +15,8 @@ const packageFiles = [
   path.join(rootDir, 'packages', 'awb-core', 'package.json'),
   path.join(rootDir, 'packages', 'awb-cli', 'package.json'),
 ];
+const skillVersionPath = path.join(rootDir, 'skills', 'awb', 'VERSION');
+const skillCompatPath = path.join(rootDir, 'skills', 'awb', 'compat.json');
 
 for (const filePath of packageFiles) {
   const data = JSON.parse(await fs.readFile(filePath, 'utf8'));
@@ -25,3 +27,13 @@ for (const filePath of packageFiles) {
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
   process.stdout.write(`updated ${path.relative(rootDir, filePath)} -> ${version}\n`);
 }
+
+await fs.writeFile(skillVersionPath, `${version}\n`, 'utf8');
+process.stdout.write(`updated ${path.relative(rootDir, skillVersionPath)} -> ${version}\n`);
+
+const compat = JSON.parse(await fs.readFile(skillCompatPath, 'utf8'));
+compat.skillVersion = version;
+compat.minCliVersion = version;
+compat.minPluginVersion = version;
+await fs.writeFile(skillCompatPath, `${JSON.stringify(compat, null, 2)}\n`, 'utf8');
+process.stdout.write(`updated ${path.relative(rootDir, skillCompatPath)} -> ${version}\n`);

@@ -9,6 +9,7 @@ This repository currently contains two entry points:
 - `opencli-plugin-awb`: 给 `opencli` 用的插件入口，继续兼容 `opencli awb ...`
 - `@lingjingai/awb-cli`: 独立 CLI 入口，命令名为 `awb`
 - `@lingjingai/awb-core`: 两者共用的核心 SDK、鉴权、上传、模型查询和任务逻辑
+- `skills/awb`: 给 Agent 用的 skill 文档、流程、兼容元数据和更新脚本
 
 目录结构 / Layout:
 
@@ -19,8 +20,15 @@ This repository currently contains two entry points:
 ├── packages/
 │   ├── awb-core/            # shared core
 │   └── awb-cli/             # standalone CLI
+├── skills/awb/              # agent skill bundle
+├── docs/                    # release/update docs
 └── README.md
 ```
+
+更新机制文档 / Update mechanism docs:
+
+- [docs/update-mechanism.md](./docs/update-mechanism.md)
+- [CHANGELOG.md](./CHANGELOG.md)
 
 ## 安装 / Install
 
@@ -86,6 +94,27 @@ npm run check
 
 ```bash
 npm run version:sync -- 0.1.1
+```
+
+Skill 元数据校验 / Validate skill metadata:
+
+```bash
+npm run check
+```
+
+## Skill / Agent Usage
+
+Skill 入口：
+
+- `skills/awb/SKILL.md`
+- `skills/awb/compat.json`
+- `skills/awb/VERSION`
+
+Skill 更新：
+
+```bash
+bash skills/awb/scripts/check-update.sh
+bash skills/awb/scripts/update.sh
 ```
 
 ## 登录 / Login

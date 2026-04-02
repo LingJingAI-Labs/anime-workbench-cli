@@ -23,7 +23,7 @@
     "lingjing"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check install.mjs && node --check packages/awb-core/commands.js && node --check packages/awb-core/standalone.js && node --check packages/awb-cli/bin/awb.js",
+    "check": "node --check index.js && node --check install.mjs && node --check packages/awb-core/commands.js && node --check packages/awb-core/standalone.js && node --check packages/awb-cli/bin/awb.js && node scripts/validate-skill-meta.mjs",
     "postinstall": "node install.mjs",
     "version:sync": "node scripts/sync-versions.mjs"
   },
