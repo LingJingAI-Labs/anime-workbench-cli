@@ -76,6 +76,7 @@ bash skills/awb/scripts/update.sh
 - 如果机器上没有 `awb`，再退回 `opencli awb`
 - Skill 文档示例尽量写成 `"$AWB_CMD" ...`
 - Workflow 只保留单元化基础用法，不维护复杂串联生产流
+- 批量生图、批量生视频属于单元化高频用法，单独维护 workflow
 
 ## 独立 CLI 登录态
 

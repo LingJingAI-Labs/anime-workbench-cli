@@ -32,10 +32,12 @@ command -v "$AWB_CMD" >/dev/null 2>&1 || AWB_CMD="opencli awb"
 
 - 简单文生图：见 `workflows/simple-text-to-image.md`
 - 参考图生图 / 多图生图：见 `workflows/reference-image-generation.md`
+- 批量生图：见 `workflows/batch-image-generation.md`
 - 首帧生视频：见 `workflows/first-frame-video.md`
 - 首尾帧生视频：见 `workflows/first-last-frame-video.md`
 - 多参考生视频：见 `workflows/multi-reference-video.md`
 - 故事板生视频：见 `workflows/storyboard-video.md`
+- 批量生视频：见 `workflows/batch-video-generation.md`
 
 更新与兼容：
 
