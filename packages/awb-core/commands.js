@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -145,6 +146,26 @@ function commandHelp(summary, options = {}) {
 function printRuntimeNote(lines) {
   for (const line of lines) {
     process.stderr.write(`${rewriteRuntimeCommandPrefix(line)}\n`);
+  }
+}
+
+function withAliases(record, mapping = {}) {
+  const next = { ...(record ?? {}) };
+  for (const [sourceKey, targetKey] of Object.entries(mapping)) {
+    next[targetKey] = record?.[sourceKey] ?? null;
+  }
+  return next;
+}
+
+function withAliasesRows(rows, mapping = {}) {
+  return (Array.isArray(rows) ? rows : []).map((item) => withAliases(item, mapping));
+}
+
+function readJsonSync(filePath) {
+  try {
+    return JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
   }
 }
 
@@ -2088,6 +2109,72 @@ function normalizeViewerPermission(value) {
   return normalized || null;
 }
 
+function permissionLabel(value) {
+  switch (normalizeViewerPermission(value)) {
+    case '1':
+      return '内部员工';
+    case '2':
+      return '合作方（专业版）';
+    case '3':
+      return '普通用户（含体验版）';
+    case '4':
+      return 'SVIP用户（企业版）';
+    case '5':
+      return 'VIP用户（实战版）';
+    default:
+      return null;
+  }
+}
+
+function permissionDisplay(value) {
+  const normalized = normalizeViewerPermission(value);
+  const label = permissionLabel(normalized);
+  if (!normalized) return null;
+  return label ? `${normalized} · ${label}` : normalized;
+}
+
+function formatDateTime(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  try {
+    return new Date(numeric).toLocaleString('zh-CN', {
+      hour12: false,
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+function resolveViewerPermissionSync() {
+  const stateCandidates = [
+    process.env.AWB_STATE_PATH,
+    path.join(os.homedir(), '.opencli', 'awb-state.json'),
+    path.join(os.homedir(), '.lingjingai', 'awb', 'state.json'),
+  ].filter(Boolean);
+  for (const statePath of stateCandidates) {
+    const state = readJsonSync(statePath);
+    const permission = normalizeViewerPermission(state?.currentPermission ?? state?.currentUserPermission);
+    if (permission) return permission;
+  }
+  const authCandidates = [
+    process.env.AWB_AUTH_PATH,
+    path.join(os.homedir(), '.opencli', 'awb-auth.json'),
+    path.join(os.homedir(), '.lingjingai', 'awb', 'auth.json'),
+    path.join(os.homedir(), '.animeworkbench_auth.json'),
+  ].filter(Boolean);
+  for (const authPath of authCandidates) {
+    const auth = readJsonSync(authPath);
+    const permission = normalizeViewerPermission(auth?.permission ?? auth?.currentPermission);
+    if (permission) return permission;
+  }
+  return null;
+}
+
+function isInternalViewerSync() {
+  return resolveViewerPermissionSync() === '1';
+}
+
 function parseModelDisplayScopes(value) {
   return String(value ?? '')
     .split(',')
@@ -2119,6 +2206,12 @@ async function resolveViewerPermission(kwargs = {}) {
   if (authPermission) return authPermission;
   const me = await currentUserSummary().catch(() => null);
   return normalizeViewerPermission(me?.permission);
+}
+
+async function assertInternalViewer(kwargs = {}) {
+  const permission = await resolveViewerPermission(kwargs);
+  if (permission === '1') return;
+  throw new Error('`subject-upload` 仅对内部员工开放。');
 }
 
 async function fetchModelRowsByTaskType(taskType, taskPrompt = '', viewerPermission = null) {
@@ -2946,6 +3039,8 @@ async function currentUserSummary() {
     userName: userInfo?.userName ?? userInfo?.nickName ?? null,
     phone: userInfo?.phone ?? null,
     permission: userInfo?.permission ?? null,
+    permissionLabel: permissionLabel(userInfo?.permission),
+    permissionDisplay: permissionDisplay(userInfo?.permission),
     currentGroupId: userInfo?.groupId ?? currentTeam?.groupId ?? null,
     currentGroupName: userInfo?.groupName ?? currentTeam?.groupName ?? null,
     currentProjectGroupNo: projectGroupSummary?.projectGroupNo ?? null,
@@ -2960,12 +3055,286 @@ async function currentUserSummary() {
     currentUserId: summary.userId,
     currentUserName: summary.userName,
     currentPermission: summary.permission,
+    currentPermissionLabel: summary.permissionLabel,
     currentGroupId: summary.currentGroupId,
     currentGroupName: summary.currentGroupName,
     currentProjectGroupNo: summary.currentProjectGroupNo,
     currentProjectGroupName: summary.currentProjectGroupName,
   });
   return summary;
+}
+
+function presentCurrentUserSummary(summary) {
+  return {
+    ...summary,
+    用户名: summary.userName ?? null,
+    权限: summary.permissionDisplay ?? permissionDisplay(summary.permission),
+    当前团队: summary.currentGroupName ?? null,
+    当前项目组: summary.currentProjectGroupName ?? null,
+    团队积分: summary.teamPointBalance ?? null,
+    项目组积分: summary.projectPointBalance ?? null,
+    登录有效期: formatDateTime(summary.authExpiresAt),
+  };
+}
+
+function presentAuthClearResult(result) {
+  return withAliases(result, {
+    cleared: '已清空',
+  });
+}
+
+function presentAuthStatus(summary) {
+  return withAliases(
+    {
+      ...summary,
+      expiresAtText: formatDateTime(summary?.expiresAt),
+      updatedAtText: formatDateTime(summary?.updatedAt),
+    },
+    {
+      loginState: '登录状态',
+      hasToken: '有令牌',
+      hasRefreshToken: '有续期令牌',
+      expiresAtText: '过期时间',
+      lastAuthError: '失效原因',
+      updatedAtText: '更新时间',
+    },
+  );
+}
+
+function presentLoginResult(result) {
+  return withAliases(result, {
+    status: '状态',
+    loginMethod: '登录方式',
+    needsBind: '需绑定手机号',
+    currentGroupName: '当前团队',
+    groupCount: '团队数',
+  });
+}
+
+function presentTeamRows(rows) {
+  return withAliasesRows(rows, {
+    groupId: '团队ID',
+    groupName: '团队名称',
+    relationType: '关系类型',
+    currentGroup: '当前选中',
+  });
+}
+
+function presentProjectGroupSummary(summary) {
+  return withAliases(summary, {
+    projectGroupNo: '项目组编号',
+    projectGroupName: '项目组名称',
+    pointBalance: '项目组余额',
+    projectGroupIntegralMax: '项目组上限',
+    memberCount: '成员数',
+    updated: '已更新',
+  });
+}
+
+function presentProjectGroupRows(rows) {
+  return withAliasesRows(rows, {
+    projectGroupNo: '项目组编号',
+    projectGroupName: '项目组名称',
+    isSelected: '当前选中',
+    isLastSelected: '最近使用',
+  });
+}
+
+function presentProjectGroupUserRows(rows) {
+  return withAliasesRows(rows, {
+    userId: '用户ID',
+    userName: '用户名',
+    role: '角色',
+    isCheck: '已选中',
+  });
+}
+
+function presentPointSummary(summary) {
+  return withAliases(summary, {
+    teamPointBalance: '团队积分',
+    projectPointBalance: '项目组积分',
+    projectPointMax: '项目组上限',
+    currentProjectGroupName: '当前项目组',
+  });
+}
+
+function presentPointPackageRows(rows) {
+  return withAliasesRows(rows, {
+    packageNo: '套餐编号',
+    title: '套餐名称',
+    payType: '支付方式',
+    priceYuan: '价格(元)',
+    integralValue: '积分',
+    tag: '标签',
+    source: '来源',
+  });
+}
+
+function presentPointRecordRows(rows) {
+  return withAliasesRows(rows, {
+    operationText: '类型',
+    title: '标题',
+    point: '积分',
+    operationTime: '时间',
+    source: '来源',
+  });
+}
+
+function presentPointOrder(result) {
+  return withAliases(result, {
+    packageNo: '套餐编号',
+    rechargeNo: '订单号',
+    payStatus: '支付状态码',
+    payStatusText: '支付状态',
+    expireTime: '过期时间',
+    timedOut: '是否超时',
+  });
+}
+
+function presentInvoiceApplyResult(result) {
+  return withAliases(result, {
+    applied: '已提交',
+    invoiceType: '发票类型',
+    subjectType: '主体类型',
+    amountYuan: '金额(元)',
+    buyerName: '购买方名称',
+    proofFileName: '凭证文件名',
+    proofFileToken: '凭证文件Token',
+  });
+}
+
+function presentRedeemResult(result) {
+  return withAliases(result, {
+    redeemed: '已兑换',
+    code: '兑换码',
+    teamPointBalance: '团队积分',
+  });
+}
+
+function taskTypeLabel(value) {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return {
+    IMAGE_CREATE: '生图',
+    VIDEO_CREATE: '生视频',
+    IMAGE_EDIT: '图片编辑',
+  }[normalized] ?? value;
+}
+
+function taskStatusLabel(value) {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return {
+    CREATED: '已创建',
+    PENDING: '排队中',
+    QUEUING: '排队中',
+    PROCESSING: '处理中',
+    RUNNING: '处理中',
+    SUCCESS: '成功',
+    FAILED: '失败',
+    FAIL: '失败',
+    CANCELED: '已取消',
+    CANCELLED: '已取消',
+    TIMEOUT: '超时',
+  }[normalized] ?? value;
+}
+
+function presentUploadRows(rows) {
+  return withAliasesRows(rows, {
+    fileName: '文件名',
+    sceneType: '上传场景',
+    backendPath: '素材路径',
+    width: '宽',
+    height: '高',
+  });
+}
+
+function presentSubjectUploadResult(result) {
+  return withAliases(result, {
+    name: '主体名称',
+    groupId: '素材组ID',
+    groupName: '素材组名称',
+    subjectId: '主体ID',
+    nextRefSubject: '引用写法',
+    reusedGroup: '复用素材组',
+  });
+}
+
+function presentTaskRows(rows) {
+  return withAliasesRows(
+    rows.map((item) => ({
+      ...item,
+      taskType: taskTypeLabel(item?.taskType),
+      taskStatus: taskStatusLabel(item?.taskStatus),
+      gmtCreateText: formatDateTime(item?.gmtCreate) ?? item?.gmtCreate ?? null,
+    })),
+    {
+      taskId: '任务ID',
+      taskType: '任务类型',
+      taskStatus: '任务状态',
+      modelName: '模型',
+      pointNo: '积分',
+      gmtCreateText: '创建时间',
+    },
+  );
+}
+
+function presentTaskWaitResult(result) {
+  return withAliases(
+    {
+      ...result,
+      taskStatus: taskStatusLabel(result?.taskStatus),
+      waitedSeconds: result?.waitedMs != null ? Math.round(Number(result.waitedMs) / 1000) : null,
+    },
+    {
+      taskId: '任务ID',
+      taskStatus: '任务状态',
+      modelName: '模型',
+      firstResultUrl: '首个结果',
+      waitedSeconds: '等待秒数',
+      timedOut: '是否超时',
+    },
+  );
+}
+
+function presentPointEstimate(result) {
+  return withAliases(result, {
+    pointCost: '预计积分',
+    projectPointBalance: '项目组余额',
+    projectPointRemainingAfter: '提交后项目组剩余',
+    teamPointBalance: '团队积分',
+    teamPointRemainingAfter: '提交后团队剩余',
+  });
+}
+
+function presentTaskCreateResult(result) {
+  return withAliases(result, {
+    taskStatus: taskStatusLabel(result?.taskStatus),
+    taskId: '任务ID',
+    taskStatus: '任务状态',
+    pointCost: '预计积分',
+    projectPointBalance: '项目组余额',
+    projectPointRemainingAfter: '提交后项目组剩余',
+    projectGroupNo: '项目组编号',
+    firstResultUrl: '首个结果',
+  });
+}
+
+function presentBatchCreateRows(rows) {
+  return withAliasesRows(
+    rows.map((item) => ({
+      ...item,
+      taskStatus: taskStatusLabel(item?.taskStatus),
+    })),
+    {
+      inputIndex: '序号',
+      pointCost: '预计积分',
+      projectPointBalance: '项目组余额',
+      projectPointRemainingAfter: '提交后项目组剩余',
+      taskId: '任务ID',
+      taskStatus: '任务状态',
+      projectGroupNo: '项目组编号',
+      error: '错误',
+    },
+  );
 }
 
 function rewriteAwbErrorMessage(error, context = {}) {
@@ -4670,6 +5039,7 @@ async function previewVideoCreate(kwargs) {
 }
 
 export function registerAwbCommands(cli) {
+const canUseInternalCommands = isInternalViewerSync();
 cli({
   site: SITE,
   name: 'auth-clear',
@@ -4678,10 +5048,10 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['cleared'],
+  columns: ['已清空'],
   func: async () => {
     await clearAuth();
-    return { cleared: true };
+    return presentAuthClearResult({ cleared: true });
   },
 });
 
@@ -4693,8 +5063,8 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['loginState', 'hasToken', 'hasRefreshToken', 'expiresAt', 'lastAuthError', 'updatedAt'],
-  func: async () => safeAuthSummary(await loadAuth()),
+  columns: ['登录状态', '有令牌', '有续期令牌', '过期时间', '失效原因', '更新时间'],
+  func: async () => presentAuthStatus(safeAuthSummary(await loadAuth())),
 });
 
 cli({
@@ -4715,7 +5085,7 @@ cli({
     { name: 'pollIntervalMs', type: 'int', default: 2000, help: '轮询间隔毫秒数。示例: 2000' },
     { name: 'qrSize', type: 'int', default: 28, help: '终端二维码尺寸。默认更易扫码；可手动调大/调小。示例: 24、28、30、32' },
   ],
-  columns: ['status', 'loginMethod', 'needsBind', 'currentGroupName', 'groupCount'],
+  columns: ['状态', '登录方式', '需绑定手机号', '当前团队', '团队数'],
   func: async (_page, kwargs) => {
     const qr = await apiFetch('/api/anime/user/account/wechat/mp/qrcode', {
       method: 'GET',
@@ -4745,7 +5115,7 @@ cli({
     }
 
     if (waitSeconds <= 0) {
-      return {
+      return presentLoginResult({
         status: 'pending',
         loginMethod: 'wechat-qr',
         needsBind: false,
@@ -4754,18 +5124,18 @@ cli({
         currentGroupName: null,
         currentGroupId: null,
         groupCount: 0,
-      };
+      });
     }
 
     const result = await pollQrLogin(qr.sceneStr, {
       waitSeconds,
       pollIntervalMs: kwargs.pollIntervalMs,
     });
-    return {
+    return presentLoginResult({
       ...result,
       qrUrl,
       sceneStr: qr.sceneStr,
-    };
+    });
   },
 });
 
@@ -4788,8 +5158,8 @@ cli({
     { name: 'waitSeconds', type: 'int', default: 180, help: '最多等待多少秒。示例: 180' },
     { name: 'pollIntervalMs', type: 'int', default: 2000, help: '轮询间隔毫秒数。示例: 2000' },
   ],
-  columns: ['status', 'loginMethod', 'needsBind', 'currentGroupName', 'groupCount'],
-  func: async (_page, kwargs) => pollQrLogin(kwargs.sceneStr, kwargs),
+  columns: ['状态', '登录方式', '需绑定手机号', '当前团队', '团队数'],
+  func: async (_page, kwargs) => presentLoginResult(await pollQrLogin(kwargs.sceneStr, kwargs)),
 });
 
 cli({
@@ -4810,10 +5180,10 @@ cli({
     { name: 'productCode', default: SEND_CODE_PRODUCT_CODE, help: '产品编码。通常不用改' },
     DRY_RUN_ARG,
   ],
-  columns: ['sent', 'phone'],
+  columns: ['已发送', '手机号'],
   func: async (_page, kwargs) => {
     if (toBool(kwargs.dryRun)) {
-      return {
+      return withAliases({
         dryRun: true,
         action: 'send-code',
         request: {
@@ -4822,7 +5192,7 @@ cli({
           captchaVerifyParam: kwargs.captchaVerifyParam,
           SceneId: kwargs.sceneId || SEND_CODE_SCENE_ID,
         },
-      };
+      }, { sent: '已发送', phone: '手机号' });
     }
     await apiFetch('/api/anime/user/account/sendVerifyCode', {
       auth: false,
@@ -4833,7 +5203,7 @@ cli({
         SceneId: kwargs.sceneId || SEND_CODE_SCENE_ID,
       },
     });
-    return { sent: true, phone: kwargs.phone };
+    return withAliases({ sent: true, phone: kwargs.phone }, { sent: '已发送', phone: '手机号' });
   },
 });
 
@@ -4850,14 +5220,14 @@ cli({
     { name: 'code', required: true, help: '短信验证码。示例: 123456' },
     DRY_RUN_ARG,
   ],
-  columns: ['status', 'loginMethod', 'currentGroupName', 'groupCount'],
+  columns: ['状态', '登录方式', '当前团队', '团队数'],
   func: async (_page, kwargs) => {
     if (toBool(kwargs.dryRun)) {
-      return {
+      return presentLoginResult({
         dryRun: true,
         action: 'phone-login',
         request: { phone: kwargs.phone, code: kwargs.code },
-      };
+      });
     }
     const data = await apiFetch('/api/anime/user/account/phoneLogin', {
       auth: false,
@@ -4868,7 +5238,7 @@ cli({
     });
     await saveLoginPayload(data, { loginMethod: 'phone' });
     const me = await currentUserSummary().catch(() => ({}));
-    return {
+    return presentLoginResult({
       status: 'success',
       loginMethod: 'phone',
       needsBind: false,
@@ -4877,7 +5247,7 @@ cli({
       currentGroupName: me.currentGroupName ?? null,
       currentGroupId: me.currentGroupId ?? null,
       groupCount: Array.isArray(data?.groupMembers) ? data.groupMembers.length : 0,
-    };
+    });
   },
 });
 
@@ -4896,7 +5266,7 @@ cli({
     { name: 'tempToken', help: '扫码登录返回 `needBind` 时的临时 token。通常可留空' },
     DRY_RUN_ARG,
   ],
-  columns: ['status', 'loginMethod', 'currentGroupName', 'groupCount'],
+  columns: ['状态', '登录方式', '当前团队', '团队数'],
   func: async (_page, kwargs) => {
     const auth = await loadAuth();
     const tempToken = kwargs.tempToken || auth?.tempToken;
@@ -4904,11 +5274,11 @@ cli({
       throw new Error('No temp token found. Use `opencli awb login-qr` first and wait for `needBind`.');
     }
     if (toBool(kwargs.dryRun)) {
-      return {
+      return presentLoginResult({
         dryRun: true,
         action: 'bind-phone',
         request: { phone: kwargs.phone, code: kwargs.code, tempToken: '<hidden>' },
-      };
+      });
     }
 
     const data = await apiFetch('/api/anime/user/account/wechat/bindPhone', {
@@ -4921,7 +5291,7 @@ cli({
     });
     await saveLoginPayload(data, { loginMethod: 'wechat-bind-phone', tempToken: undefined });
     const me = await currentUserSummary().catch(() => ({}));
-    return {
+    return presentLoginResult({
       status: 'success',
       loginMethod: 'wechat-bind-phone',
       needsBind: false,
@@ -4930,7 +5300,7 @@ cli({
       currentGroupName: me.currentGroupName ?? null,
       currentGroupId: me.currentGroupId ?? null,
       groupCount: Array.isArray(data?.groupMembers) ? data.groupMembers.length : 0,
-    };
+    });
   },
 });
 
@@ -4943,14 +5313,15 @@ cli({
   browser: false,
   args: [],
   columns: [
-    'userName',
-    'currentGroupName',
-    'currentProjectGroupName',
-    'teamPointBalance',
-    'projectPointBalance',
-    'authExpiresAt',
+    '用户名',
+    '权限',
+    '当前团队',
+    '当前项目组',
+    '团队积分',
+    '项目组积分',
+    '登录有效期',
   ],
-  func: async () => currentUserSummary(),
+  func: async () => presentCurrentUserSummary(await currentUserSummary()),
 });
 
 cli({
@@ -4961,12 +5332,12 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['groupId', 'groupName', 'relationType', 'currentGroup'],
+  columns: ['团队ID', '团队名称', '关系类型', '当前选中'],
   func: async () => {
     const groups = await apiFetch('/api/anime/user/group/getOwnGroupList', {
       body: {},
     });
-    return normalizeRows(Array.isArray(groups) ? groups : []);
+    return presentTeamRows(normalizeRows(Array.isArray(groups) ? groups : []));
   },
 });
 
@@ -4982,7 +5353,7 @@ cli({
     { name: 'groupId', required: true, help: '目标团队 groupId。示例: cd8fa7f8fd73421b8bbdae10bc9f5e56' },
     DRY_RUN_ARG,
   ],
-  columns: ['userName', 'currentGroupName', 'teamPointBalance'],
+  columns: ['用户名', '当前团队', '团队积分'],
   func: async (_page, kwargs) => {
     if (toBool(kwargs.dryRun)) {
       return { dryRun: true, action: 'team-select', request: { groupId: kwargs.groupId } };
@@ -4993,7 +5364,11 @@ cli({
     if (response?.token || response?.session || response?.expires) {
       await saveLoginPayload(response, { currentGroupId: kwargs.groupId });
     }
-    return currentUserSummary();
+    return withAliases(await currentUserSummary(), {
+      userName: '用户名',
+      currentGroupName: '当前团队',
+      teamPointBalance: '团队积分',
+    });
   },
 });
 
@@ -5005,7 +5380,7 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['projectGroupNo', 'projectGroupName', 'isSelected', 'isLastSelected'],
+  columns: ['项目组编号', '项目组名称', '当前选中', '最近使用'],
   func: async () => {
     const { list, lastProjectGroupNo } = await getProjectGroupsPayload();
     const state = await loadState();
@@ -5013,11 +5388,11 @@ cli({
     if (selectedProjectGroupNo) {
       await saveState({ currentProjectGroupNo: selectedProjectGroupNo });
     }
-    return list.map((item) => ({
+    return presentProjectGroupRows(list.map((item) => ({
       ...normalizeProjectGroupRecord(item, selectedProjectGroupNo),
       isLastSelected:
         (item?.projectGroupNo ?? item?.no ?? null) === lastProjectGroupNo,
-    }));
+    })));
   },
 });
 
@@ -5029,12 +5404,12 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['userId', 'userName', 'role', 'isCheck'],
+  columns: ['用户ID', '用户名', '角色', '已选中'],
   func: async () => {
     const payload = await apiFetch('/api/anime/workbench/projectGroup/getGroupAllUser', {
       method: 'GET',
     });
-    return normalizeRows(Array.isArray(payload) ? payload : []);
+    return presentProjectGroupUserRows(normalizeRows(Array.isArray(payload) ? payload : []));
   },
 });
 
@@ -5056,8 +5431,11 @@ cli({
     { name: 'membersJson', help: '直接覆盖 groupUser 请求体的 JSON 数组' },
     DRY_RUN_ARG,
   ],
-  columns: ['projectGroupNo', 'projectGroupName', 'pointBalance', 'projectGroupIntegralMax', 'memberCount'],
-  func: async (_page, kwargs) => (toBool(kwargs.dryRun) ? previewProjectGroupCreate(kwargs) : createProjectGroup(kwargs)),
+  columns: ['项目组编号', '项目组名称', '项目组余额', '项目组上限', '成员数'],
+  func: async (_page, kwargs) =>
+    presentProjectGroupSummary(
+      toBool(kwargs.dryRun) ? await previewProjectGroupCreate(kwargs) : await createProjectGroup(kwargs),
+    ),
 });
 
 cli({
@@ -5072,16 +5450,16 @@ cli({
     { name: 'projectGroupNo', required: true, help: '目标项目组编号。示例: 12956e17aa624d8d8addde3b0be9f633' },
     DRY_RUN_ARG,
   ],
-  columns: ['projectGroupNo', 'projectGroupName', 'pointBalance', 'projectGroupIntegralMax'],
+  columns: ['项目组编号', '项目组名称', '项目组余额', '项目组上限'],
   func: async (_page, kwargs) => {
     if (toBool(kwargs.dryRun)) {
-      return { dryRun: true, action: 'project-group-select', request: { projectGroupNo: kwargs.projectGroupNo } };
+      return presentProjectGroupSummary({ dryRun: true, action: 'project-group-select', request: { projectGroupNo: kwargs.projectGroupNo } });
     }
     await apiFetch('/api/anime/workbench/projectGroup/setLastProjectGroup', {
       body: { projectGroupNo: kwargs.projectGroupNo },
     });
     await saveState({ currentProjectGroupNo: kwargs.projectGroupNo });
-    return fetchProjectGroupSummary(kwargs.projectGroupNo);
+    return presentProjectGroupSummary(await fetchProjectGroupSummary(kwargs.projectGroupNo));
   },
 });
 
@@ -5093,8 +5471,8 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['projectGroupNo', 'projectGroupName', 'pointBalance', 'projectGroupIntegralMax'],
-  func: async () => fetchProjectGroupSummary(),
+  columns: ['项目组编号', '项目组名称', '项目组余额', '项目组上限'],
+  func: async () => presentProjectGroupSummary(await fetchProjectGroupSummary()),
 });
 
 cli({
@@ -5115,8 +5493,11 @@ cli({
     { name: 'point', help: '新的项目组积分上限。示例: 1000' },
     DRY_RUN_ARG,
   ],
-  columns: ['projectGroupNo', 'projectGroupName', 'pointBalance', 'projectGroupIntegralMax', 'updated'],
-  func: async (_page, kwargs) => (toBool(kwargs.dryRun) ? previewProjectGroupUpdate(kwargs) : updateProjectGroup(kwargs)),
+  columns: ['项目组编号', '项目组名称', '项目组余额', '项目组上限', '已更新'],
+  func: async (_page, kwargs) =>
+    presentProjectGroupSummary(
+      toBool(kwargs.dryRun) ? await previewProjectGroupUpdate(kwargs) : await updateProjectGroup(kwargs),
+    ),
 });
 
 cli({
@@ -5128,13 +5509,13 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['teamPointBalance', 'projectPointBalance', 'projectPointMax', 'currentProjectGroupName'],
+  columns: ['团队积分', '项目组积分', '项目组上限', '当前项目组'],
   func: async () => {
     const payload = await apiFetch('/api/anime/member/benefits/queryGroupPoint', {
       body: {},
     });
     const projectGroup = await fetchProjectGroupSummary().catch(() => null);
-    return {
+    return presentPointSummary({
       pointBalance: extractPointBalance(payload),
       teamPointBalance: extractPointBalance(payload),
       projectPointBalance: projectGroup?.projectGroupIntegralCurrent ?? null,
@@ -5145,7 +5526,7 @@ cli({
         team: payload,
         projectGroup,
       }),
-    };
+    });
   },
 });
 
@@ -5158,7 +5539,7 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['packageNo', 'title', 'payType', 'priceYuan', 'integralValue', 'tag', 'source'],
+  columns: ['套餐编号', '套餐名称', '支付方式', '价格(元)', '积分', '标签', '来源'],
   func: async () => {
     try {
       const payload = await apiFetch('/api/anime/member/benefits/queryPointPackage', {
@@ -5168,7 +5549,7 @@ cli({
       if (rows.length) {
         await savePointPackageCache(rows);
       }
-      return rows;
+      return presentPointPackageRows(rows);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('未知异常')) {
@@ -5178,10 +5559,10 @@ cli({
             : await loadPointPackageRecordFallback();
         if (fallbackRows.length) {
           printRuntimeNote(['[AWB] 实时积分包接口当前未返回可用数据，已回退到最近一次同步缓存。']);
-          return fallbackRows.map((item) => ({
+          return presentPointPackageRows(fallbackRows.map((item) => ({
             ...item,
             source: 'cache',
-          }));
+          })));
         }
         throw new Error('平台当前未返回可用积分包数据。通常是该账号/团队未开通购买，或平台接口本身异常。若你刚用浏览器抓到过套餐页，可重试本命令读取缓存。');
       }
@@ -5208,7 +5589,7 @@ cli({
     { name: 'operation', default: '全部', help: '记录类型：全部 / 消耗 / 获得。也接受 all / expend / expand / recharge。' },
     { name: 'requestJson', help: '直接覆盖请求体 JSON。示例: {"queryType":2,"page":1,"size":10}' },
   ],
-  columns: ['operationText', 'title', 'point', 'operationTime', 'source'],
+  columns: ['类型', '标题', '积分', '时间', '来源'],
   func: async (_page, kwargs) => {
     const normalizedOperation = normalizePointRecordOperation(kwargs.operation);
     const body = normalizePointRecordRequestBody(
@@ -5238,7 +5619,7 @@ cli({
         };
         await savePointRecordCache(cache);
       }
-      return rows;
+      return presentPointRecordRows(rows);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('未知异常')) {
@@ -5248,10 +5629,10 @@ cli({
         const snapshot = cache?.[normalizedOperation || 'all'];
         if (Array.isArray(snapshot?.rows) && snapshot.rows.length) {
           printRuntimeNote(['[AWB] 实时积分记录接口当前未返回可用数据，已回退到最近一次同步缓存。']);
-          return snapshot.rows.map((item) => ({
+          return presentPointRecordRows(snapshot.rows.map((item) => ({
             ...item,
             source: 'cache',
-          }));
+          })));
         }
         throw new Error('平台当前未返回积分记录数据。建议先在网页里打开积分记录页点一次 `全部 / 消耗 / 获得`，再重试本命令读取缓存。');
       }
@@ -5279,7 +5660,7 @@ cli({
     { name: 'qrSize', type: 'int', default: 24, help: '终端支付二维码尺寸。示例: 24、28、32' },
     DRY_RUN_ARG,
   ],
-  columns: ['packageNo', 'rechargeNo', 'payStatus', 'payStatusText', 'expireTime'],
+  columns: ['套餐编号', '订单号', '支付状态码', '支付状态', '过期时间'],
   func: async (_page, kwargs) => {
     const packageNo = String(kwargs.packageNo || '').trim();
     if (!packageNo) {
@@ -5331,7 +5712,7 @@ cli({
         })
       : null;
 
-    return {
+    return presentPointOrder({
       packageNo,
       rechargeNo,
       payUrl,
@@ -5343,7 +5724,7 @@ cli({
         create: payload,
         status,
       }),
-    };
+    });
   },
 });
 
@@ -5363,16 +5744,16 @@ cli({
     { name: 'waitSeconds', type: 'int', default: 0, help: '持续轮询秒数。0=只查一次。示例: 60' },
     { name: 'pollIntervalMs', type: 'int', default: 1500, help: '轮询间隔毫秒。示例: 1500' },
   ],
-  columns: ['rechargeNo', 'payStatus', 'payStatusText', 'timedOut'],
+  columns: ['订单号', '支付状态码', '支付状态', '是否超时'],
   func: async (_page, kwargs) => {
     const rechargeNo = String(kwargs.rechargeNo || '').trim();
     if (!rechargeNo) {
       throw new Error('缺少 `rechargeNo`。');
     }
-    return pollPayStatus(rechargeNo, {
+    return presentPointOrder(await pollPayStatus(rechargeNo, {
       waitSeconds: kwargs.waitSeconds,
       pollIntervalMs: kwargs.pollIntervalMs,
-    });
+    }));
   },
 });
 
@@ -5403,7 +5784,7 @@ cli({
     { name: 'wechatName', required: true, help: '微信号或昵称，便于财务联系。' },
     DRY_RUN_ARG,
   ],
-  columns: ['applied', 'invoiceType', 'subjectType', 'amountYuan', 'buyerName', 'proofFileName', 'proofFileToken'],
+  columns: ['已提交', '发票类型', '主体类型', '金额(元)', '购买方名称', '凭证文件名', '凭证文件Token'],
   func: async (page, kwargs) => {
     const attachmentPreview = await inspectLocalFileInfo(kwargs.proofFile);
     const { invoiceType, subjectType, payload } = buildInvoiceFormPayload(kwargs, [
@@ -5414,7 +5795,7 @@ cli({
       },
     ]);
     if (toBool(kwargs.dryRun)) {
-      return {
+      return presentInvoiceApplyResult({
         dryRun: true,
         action: 'invoice-apply',
         formUrl: AWB_INVOICE_FORM_URL,
@@ -5424,7 +5805,7 @@ cli({
         proofFileName: attachmentPreview.fileName,
         proofFileSize: attachmentPreview.size,
         request: payload,
-      };
+      });
     }
     printRuntimeNote([
       '[AWB] 正在上传开票凭证并提交申请...',
@@ -5432,7 +5813,7 @@ cli({
       `[AWB] 主体类型: ${subjectType.label}`,
       `[AWB] 付款凭证: ${attachmentPreview.fileName}`,
     ]);
-    return submitInvoiceForm(page, kwargs);
+    return presentInvoiceApplyResult(await submitInvoiceForm(page, kwargs));
   },
 });
 
@@ -5448,14 +5829,14 @@ cli({
     { name: 'code', required: true, help: '兑换码。格式: XXXX-XXXX-XXXX-XXXX' },
     DRY_RUN_ARG,
   ],
-  columns: ['redeemed', 'code', 'teamPointBalance'],
+  columns: ['已兑换', '兑换码', '团队积分'],
   func: async (_page, kwargs) => {
     const code = normalizeCode(kwargs.code);
     if (!REDEEM_CODE_RE.test(code)) {
       throw new Error('Invalid code format. Expected XXXX-XXXX-XXXX-XXXX.');
     }
     if (toBool(kwargs.dryRun)) {
-      return { dryRun: true, action: 'redeem', request: { code } };
+      return presentRedeemResult({ dryRun: true, action: 'redeem', request: { code } });
     }
     await apiFetch('/api/anime/member/redemption/redeemCode', {
       query: { code },
@@ -5464,11 +5845,11 @@ cli({
     const points = await apiFetch('/api/anime/member/benefits/queryGroupPoint', {
       body: {},
     });
-    return {
+    return presentRedeemResult({
       redeemed: true,
       code,
       teamPointBalance: extractPointBalance(points),
-    };
+    });
   },
 });
 
@@ -5621,7 +6002,7 @@ cli({
     },
     DRY_RUN_ARG,
   ],
-  columns: ['fileName', 'sceneType', 'backendPath', 'width', 'height'],
+  columns: ['文件名', '上传场景', '素材路径', '宽', '高'],
   func: async (_page, kwargs) => {
     const sceneType = kwargs.sceneType || TASK_UPLOAD_SCENE.IMAGE_CREATE;
     const allowedSceneTypes = [...new Set(Object.values(TASK_UPLOAD_SCENE))];
@@ -5629,12 +6010,12 @@ cli({
       throw new Error(`不支持的 sceneType: ${sceneType}。可选值: ${allowedSceneTypes.join(', ')}`);
     }
     if (toBool(kwargs.dryRun)) {
-      return previewUploadFiles({ ...kwargs, sceneType });
+      return presentUploadRows([await previewUploadFiles({ ...kwargs, sceneType })])[0];
     }
     const rows = await uploadLocalFiles(parseListArg(kwargs.files), {
       sceneType,
     });
-    return rows.map((item) => ({
+    return presentUploadRows(rows.map((item) => ({
       fileName: item.fileName,
       sceneType: item.sceneType,
       mimeType: item.mimeType,
@@ -5645,11 +6026,11 @@ cli({
       signedUrl: item.signedUrl,
       objectName: item.objectName,
       raw: JSON.stringify(item),
-    }));
+    })));
   },
 });
 
-cli({
+if (canUseInternalCommands) cli({
   site: SITE,
   name: 'subject-upload',
   description: commandHelp('上传真人/角色图片到主体素材组，返回可复用的 subjectId', {
@@ -5685,8 +6066,13 @@ cli({
     { name: 'platform', help: '可选平台字段；默认不传，沿用平台默认值。' },
     DRY_RUN_ARG,
   ],
-  columns: ['name', 'groupId', 'groupName', 'subjectId', 'nextRefSubject', 'reusedGroup'],
-  func: async (_page, kwargs) => (toBool(kwargs.dryRun) ? previewSubjectUpload(kwargs) : uploadSubjectAssets(kwargs)),
+  columns: ['主体名称', '素材组ID', '素材组名称', '主体ID', '引用写法', '复用素材组'],
+  func: async (_page, kwargs) => {
+    await assertInternalViewer(kwargs);
+    return presentSubjectUploadResult(
+      toBool(kwargs.dryRun) ? await previewSubjectUpload(kwargs) : await uploadSubjectAssets(kwargs),
+    );
+  },
 });
 
 cli({
@@ -5702,8 +6088,8 @@ cli({
     { name: 'pageSize', type: 'int', default: 20 },
     { name: 'minTime', help: 'Unix 毫秒时间戳上界；不传默认当前时间' },
   ],
-  columns: ['taskId', 'taskType', 'taskStatus', 'modelName', 'pointNo', 'gmtCreate'],
-  func: async (_page, kwargs) => fetchTaskFeed(kwargs),
+  columns: ['任务ID', '任务类型', '任务状态', '模型', '积分', '创建时间'],
+  func: async (_page, kwargs) => presentTaskRows(await fetchTaskFeed(kwargs)),
 });
 
 cli({
@@ -5729,8 +6115,8 @@ cli({
     { name: 'waitSeconds', type: 'int', default: 300 },
     { name: 'pollIntervalMs', type: 'int', default: 5000 },
   ],
-  columns: ['taskId', 'taskStatus', 'modelName', 'firstResultUrl', 'waitedMs', 'timedOut'],
-  func: async (_page, kwargs) => waitForTask(kwargs),
+  columns: ['任务ID', '任务状态', '模型', '首个结果', '等待秒数', '是否超时'],
+  func: async (_page, kwargs) => presentTaskWaitResult(await waitForTask(kwargs)),
 });
 
 cli({
@@ -5761,13 +6147,13 @@ cli({
     { name: 'srefFiles', help: '本地风格参考图路径，多个逗号分隔；CLI 会先自动上传再作为参考图使用' },
     { name: 'irefFiles', help: '本地画面参考图路径，多个逗号分隔；CLI 会先自动上传再作为参考图使用' },
   ],
-  columns: ['pointCost', 'projectPointBalance', 'projectPointRemainingAfter', 'teamPointBalance', 'teamPointRemainingAfter'],
+  columns: ['预计积分', '项目组余额', '提交后项目组剩余', '团队积分', '提交后团队剩余'],
   func: async (_page, kwargs) => {
     ensureModelSelector('image-fee', kwargs);
     ensureRequiredArgs('image-fee', kwargs, [
       { key: 'prompt', help: '例如 `--prompt "一只小狗"`' },
     ]);
-    return estimateImageFee(kwargs);
+    return presentPointEstimate(await estimateImageFee(kwargs));
   },
 });
 
@@ -5821,13 +6207,15 @@ cli({
     { name: 'pollIntervalMs', type: 'int', default: 5000, help: '等待结果时的轮询间隔毫秒。示例: 5000' },
     DRY_RUN_ARG,
   ],
-  columns: ['taskId', 'taskStatus', 'pointCost', 'projectPointBalance', 'projectPointRemainingAfter', 'projectGroupNo', 'firstResultUrl'],
+  columns: ['任务ID', '任务状态', '预计积分', '项目组余额', '提交后项目组剩余', '项目组编号', '首个结果'],
   func: async (_page, kwargs) => {
     ensureModelSelector('image-create', kwargs);
     ensureRequiredArgs('image-create', kwargs, [
       { key: 'prompt', help: '例如 `--prompt "一只小狗"`' },
     ]);
-    return toBool(kwargs.dryRun) ? previewImageCreate(kwargs) : createImageTask(kwargs);
+    return presentTaskCreateResult(
+      toBool(kwargs.dryRun) ? await previewImageCreate(kwargs) : await createImageTask(kwargs),
+    );
   },
 });
 
@@ -5858,7 +6246,7 @@ cli({
     { name: 'irefFiles', help: '默认本地画面参考图；会自动上传，并给每条任务复用' },
     DRY_RUN_ARG,
   ],
-  columns: ['inputIndex', 'pointCost', 'projectPointBalance', 'projectPointRemainingAfter', 'taskId', 'taskStatus', 'projectGroupNo', 'error'],
+  columns: ['序号', '预计积分', '项目组余额', '提交后项目组剩余', '任务ID', '任务状态', '项目组编号', '错误'],
   func: async (_page, kwargs) => {
     const items = await loadBatchItems(kwargs.inputFile, 'image');
     if (toBool(kwargs.dryRun)) {
@@ -5893,7 +6281,7 @@ cli({
         };
       }));
       printBatchEstimateSummary('生图', rows);
-      return rows.map((row, index) => ({
+      return presentBatchCreateRows(rows.map((row, index) => ({
         inputIndex: row?.inputIndex ?? index,
         pointCost: row?.pointCost ?? null,
         projectPointBalance: row?.projectPointBalance ?? null,
@@ -5903,9 +6291,9 @@ cli({
         projectGroupNo: row?.projectGroupNo ?? row?.currentProjectGroupNo ?? null,
         error: row?.error ?? null,
         raw: JSON.stringify(row),
-      }));
+      })));
     }
-    return runConcurrent(items, kwargs.concurrency, async (item, index) => {
+    return presentBatchCreateRows(await runConcurrent(items, kwargs.concurrency, async (item, index) => {
       const merged = mergeBatchDefaults(kwargs, item);
       if (!merged.modelCode && !merged.modelGroupCode) {
         throw new Error('Each batch image item must include `modelGroupCode` or `modelCode`.');
@@ -5928,7 +6316,7 @@ cli({
           result,
         }),
       };
-    });
+    }));
   },
 });
 
@@ -5977,10 +6365,10 @@ cli({
     { name: 'richTaskPrompt', default: '', help: '富文本任务提示词；只有需要底层富文本能力时再传' },
     { name: 'promptParamsJson', help: '高级用法：直接覆盖整个 promptParams JSON。只有想绕过单独参数时再用' },
   ],
-  columns: ['pointCost', 'projectPointBalance', 'projectPointRemainingAfter', 'teamPointBalance', 'teamPointRemainingAfter'],
+  columns: ['预计积分', '项目组余额', '提交后项目组剩余', '团队积分', '提交后团队剩余'],
   func: async (_page, kwargs) => {
     ensureModelSelector('video-fee', kwargs);
-    return estimateVideoFee(kwargs);
+    return presentPointEstimate(await estimateVideoFee(kwargs));
   },
 });
 
@@ -6058,7 +6446,7 @@ cli({
     { name: 'pollIntervalMs', type: 'int', default: 5000, help: '等待结果时的轮询间隔毫秒。示例: 5000' },
     DRY_RUN_ARG,
   ],
-  columns: ['taskId', 'taskStatus', 'pointCost', 'projectPointBalance', 'projectPointRemainingAfter', 'projectGroupNo', 'firstResultUrl'],
+  columns: ['任务ID', '任务状态', '预计积分', '项目组余额', '提交后项目组剩余', '项目组编号', '首个结果'],
   func: async (_page, kwargs) => {
     ensureModelSelector('video-create', kwargs);
     if (!hasVideoSubmissionContent(kwargs)) {
@@ -6072,7 +6460,9 @@ cli({
         `可先查看模型参数: opencli awb model-options --modelCode ${kwargs.modelCode} --modelGroupCode ${kwargs.modelGroupCode}`,
       ].join('\n'));
     }
-    return toBool(kwargs.dryRun) ? previewVideoCreate(kwargs) : createVideoTask(kwargs);
+    return presentTaskCreateResult(
+      toBool(kwargs.dryRun) ? await previewVideoCreate(kwargs) : await createVideoTask(kwargs),
+    );
   },
 });
 
@@ -6124,7 +6514,7 @@ cli({
     { name: 'promptParamsJson', help: '默认直接覆盖 promptParams JSON；只有普通参数不够时再用' },
     DRY_RUN_ARG,
   ],
-  columns: ['inputIndex', 'pointCost', 'projectPointBalance', 'projectPointRemainingAfter', 'taskId', 'taskStatus', 'projectGroupNo', 'error'],
+  columns: ['序号', '预计积分', '项目组余额', '提交后项目组剩余', '任务ID', '任务状态', '项目组编号', '错误'],
   func: async (_page, kwargs) => {
     const items = await loadBatchItems(kwargs.inputFile, 'video');
     if (toBool(kwargs.dryRun)) {
@@ -6147,7 +6537,7 @@ cli({
         };
       }));
       printBatchEstimateSummary('生视频', rows);
-      return rows.map((row, index) => ({
+      return presentBatchCreateRows(rows.map((row, index) => ({
         inputIndex: row?.inputIndex ?? index,
         pointCost: row?.pointCost ?? null,
         projectPointBalance: row?.projectPointBalance ?? null,
@@ -6157,9 +6547,9 @@ cli({
         projectGroupNo: row?.projectGroupNo ?? row?.currentProjectGroupNo ?? null,
         error: row?.error ?? null,
         raw: JSON.stringify(row),
-      }));
+      })));
     }
-    return runConcurrent(items, kwargs.concurrency, async (item, index) => {
+    return presentBatchCreateRows(await runConcurrent(items, kwargs.concurrency, async (item, index) => {
       const merged = mergeBatchDefaults(kwargs, item);
       if (!merged.modelCode && !merged.modelGroupCode) {
         throw new Error('Each batch video item must include `modelGroupCode` or `modelCode`.');
@@ -6182,7 +6572,7 @@ cli({
           result,
         }),
       };
-    });
+    }));
   },
 });
 

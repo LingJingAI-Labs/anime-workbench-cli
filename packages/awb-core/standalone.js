@@ -1,6 +1,8 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerAwbCommands } from './commands.js';
+import { loadAuth, loadState, safeAuthSummary } from './common.js';
 
 function runtimePrefix() {
   return 'awb';
@@ -42,6 +44,15 @@ function pad(value, width) {
   return text + ' '.repeat(Math.max(0, width - length));
 }
 
+function padCenter(value, width) {
+  const text = String(value ?? '');
+  const length = [...text].length;
+  const gap = Math.max(0, width - length);
+  const left = Math.floor(gap / 2);
+  const right = gap - left;
+  return `${' '.repeat(left)}${text}${' '.repeat(right)}`;
+}
+
 function truncate(value, maxWidth = 48) {
   const text = String(value ?? '');
   const chars = [...text];
@@ -61,7 +72,7 @@ function renderTable(rows, columns = []) {
       ...items.map((item) => [...truncate(formatScalar(item?.[column]))].length),
     ),
   );
-  const header = resolvedColumns.map((column, index) => pad(column, widths[index])).join(' │ ');
+  const header = resolvedColumns.map((column, index) => padCenter(column, widths[index])).join(' │ ');
   const divider = widths.map((width) => '─'.repeat(width)).join('─┼─');
   const body = items.map((item) =>
     resolvedColumns
@@ -181,14 +192,52 @@ function printCommandHelp(command) {
     }
     lines.push(`  ${pad(optionUsage(arg), 30)} ${rewriteHelpText(detail)}`);
   }
-  lines.push(`  ${pad('-f, --format <fmt>', 30)} Output format: table, json, yaml, md, csv`);
-  lines.push(`  ${pad('-v, --verbose', 30)} Debug output`);
+  lines.push(`  ${pad('-f, --format <fmt>', 30)} 输出格式: table, json, yaml, md, csv`);
+  lines.push(`  ${pad('-v, --verbose', 30)} 调试输出`);
   lines.push(`  ${pad('-h, --help', 30)} display help`);
   if (Array.isArray(command.columns) && command.columns.length) {
     lines.push('');
-    lines.push(`Output columns: ${command.columns.join(', ')}`);
+    lines.push(`输出列: ${command.columns.join(', ')}`);
   }
   process.stdout.write(`${lines.join('\n')}\n`);
+}
+
+async function readStandaloneVersion() {
+  try {
+    const standaloneDir = path.dirname(fileURLToPath(import.meta.url));
+    const packageJson = JSON.parse(
+      await fs.readFile(path.join(standaloneDir, '..', 'awb-cli', 'package.json'), 'utf8'),
+    );
+    return packageJson?.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function formatBannerRow(label, value, width = 8) {
+  return `${pad(label, width)} │ ${value ?? '-'}`;
+}
+
+async function buildStandaloneBanner() {
+  const [auth, state, version] = await Promise.all([
+    loadAuth().catch(() => null),
+    loadState().catch(() => ({})),
+    readStandaloneVersion(),
+  ]);
+  const authSummary = safeAuthSummary(auth);
+  const rows = [
+    formatBannerRow('品牌名称', '灵境AI | https://lingjingai.cn/'),
+    formatBannerRow('版本信息', `AWB CLI v${version}`),
+    formatBannerRow('登录状态', authSummary.loginState ?? '未登录'),
+    formatBannerRow('当前用户', state?.currentUserName ?? '未识别'),
+    formatBannerRow('当前团队', state?.currentGroupName ?? '未选择'),
+    formatBannerRow('当前项目', state?.currentProjectGroupName ?? state?.currentProjectGroupNo ?? '未选择'),
+    formatBannerRow('令牌到期', authSummary.expiresAt ? new Date(Number(authSummary.expiresAt)).toLocaleString('zh-CN', { hour12: false }) : '-'),
+  ];
+  const innerWidth = Math.max(...rows.map((row) => [...row].length), 52);
+  const top = `+${'-'.repeat(innerWidth + 2)}+`;
+  const body = rows.map((row) => `| ${pad(row, innerWidth)} |`);
+  return [top, ...body, top].join('\n');
 }
 
 function parseArgv(argv) {
@@ -241,8 +290,10 @@ export async function runStandaloneCli(argv = process.argv.slice(2)) {
   const parsed = parseArgv(argv);
   const [first, second] = parsed.positional;
   const commandName = first === 'help' ? second : first;
+  const banner = await buildStandaloneBanner().catch(() => '');
 
   if (!commandName) {
+    if (banner) process.stdout.write(`${banner}\n`);
     printGeneralHelp(commands);
     return;
   }
@@ -250,12 +301,14 @@ export async function runStandaloneCli(argv = process.argv.slice(2)) {
   const command = findCommand(commands, commandName);
   if (!command) {
     process.stderr.write(`Unknown command: ${commandName}\n`);
+    if (banner) process.stdout.write(`${banner}\n`);
     printGeneralHelp(commands);
     process.exitCode = 1;
     return;
   }
 
   if (parsed.help || first === 'help') {
+    if (banner) process.stdout.write(`${banner}\n`);
     printCommandHelp(command);
     return;
   }
