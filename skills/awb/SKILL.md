@@ -24,13 +24,13 @@ if ! command -v "$AWB_CMD" >/dev/null 2>&1; then
 fi
 ```
 
-在调用任何创作命令前，先执行这三步：
+核心路由：
 
-1. `"$AWB_CMD" auth-status -f json`
-2. 已知模型关键词时，优先 `"$AWB_CMD" image-models --model "<关键词>"` 或 `"$AWB_CMD" video-models --model "<关键词>"`
-3. `"$AWB_CMD" model-options --modelGroupCode <g>`
+1. 先确认认证状态：`"$AWB_CMD" auth-status -f json`
+2. 先定模型，再决定命令形态
+3. 参数细节以 `"$AWB_CMD" <command> --help` 和 `"$AWB_CMD" model-options --modelGroupCode <g>` 为准
 
-按任务类型选择参考：
+按任务选择文件：
 
 - 账号与项目组：见 `capabilities/auth-and-account.md`
 - 模型选择：见 `capabilities/model-discovery.md`
@@ -63,9 +63,10 @@ fi
 
 - 默认优先用 `awb`
 - 如果机器上没有 `awb`，且 `opencli awb --help` 可用，再退回 `opencli awb`
-- JSON 输出统一优先 `-f json`
+- 默认优先 `-f json`
 - 能用关键词过滤时，优先 `--model "<关键词>"`，不要先扫全量模型表
 - 需要读长输出时，优先用 `rg` 过滤文本行；需要读 JSON 时，优先用 `jq` 只摘必要字段
 - 优先先跑 `image-fee` / `video-fee`；只有结构复杂时再用 `--dryRun true`
 - 不要把整段 JSON 或整张模型表原样回显给用户，只总结必要字段
+- 遇到参数细节、默认值、必填项或模式差异时，优先看命令自己的 `--help` 和 `model-options`
 - workflow 只保留单元化基础用法，不写复杂串联生产流
