@@ -27,7 +27,7 @@ fi
 在调用任何创作命令前，先执行这三步：
 
 1. `"$AWB_CMD" auth-status -f json`
-2. `"$AWB_CMD" image-models` 或 `"$AWB_CMD" video-models`
+2. 已知模型关键词时，优先 `"$AWB_CMD" image-models --model "<关键词>"` 或 `"$AWB_CMD" video-models --model "<关键词>"`
 3. `"$AWB_CMD" model-options --modelGroupCode <g>`
 
 按任务类型选择参考：
@@ -64,5 +64,8 @@ fi
 - 默认优先用 `awb`
 - 如果机器上没有 `awb`，且 `opencli awb --help` 可用，再退回 `opencli awb`
 - JSON 输出统一优先 `-f json`
-- 真正提交前，优先先跑 `--dryRun true`
+- 能用关键词过滤时，优先 `--model "<关键词>"`，不要先扫全量模型表
+- 需要读长输出时，优先用 `rg` 过滤文本行；需要读 JSON 时，优先用 `jq` 只摘必要字段
+- 优先先跑 `image-fee` / `video-fee`；只有结构复杂时再用 `--dryRun true`
+- 不要把整段 JSON 或整张模型表原样回显给用户，只总结必要字段
 - workflow 只保留单元化基础用法，不写复杂串联生产流
