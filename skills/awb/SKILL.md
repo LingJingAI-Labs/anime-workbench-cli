@@ -1,22 +1,14 @@
 ---
 name: awb
-description: Use when Codex needs to operate Anime Workbench through `awb` or `opencli awb`, including auth checks, team or project-group switching, model discovery, image generation, video generation, batch creation, task tracking, uploads, billing, and workflow selection for prompt, reference, frame, or storyboard modes.
+description: 使用 `awb` / `opencli awb` 操作 Anime Workbench（灵境 AI）。覆盖认证、团队 / 项目组切换、模型发现、生图 / 生视频、批量、任务跟踪、素材上传、积分开票。涉及参考图、首尾帧、多参考、故事板、主体素材、批量输入、通道差价等子场景时，先读对应 module 再执行命令。
 ---
 
 # AWB Skill
 
-使用入口：
+> **前置条件**：先读 [`modules/auth.md`](modules/auth.md)，确认登录与项目组就位。
+> **执行前必做**：进到 module 里按表格定位命令，再按 must-read / deep-dive 的链接阅读。参数细节以 `model-options` 和 `<cmd> --help` 为准。
 
-- 独立 CLI：`awb`
-- opencli 插件：`opencli awb`
-
-登录前提：
-
-- 先确认用户已在官网完成注册并绑定微信：`https://animeworkbench.lingjingai.cn/home`
-- CLI 默认推荐通过微信扫码登录
-- 如果官网账号还没绑定微信，先去官网完成绑定，再继续 `login-qr`
-
-先解析可用命令：
+## 1. CLI 入口
 
 ```bash
 AWB_CMD=awb
@@ -30,49 +22,44 @@ if ! command -v "$AWB_CMD" >/dev/null 2>&1; then
 fi
 ```
 
-核心路由：
+- 默认优先 `awb`；机器上没有才退回 `opencli awb`
+- 官网：`https://animeworkbench.lingjingai.cn/home`（需先完成注册并绑定微信，再来走 `login-qr`）
 
-1. 先确认认证状态：`"$AWB_CMD" auth-status -f json`
-2. 先定模型，再决定命令形态
-3. 参数细节以 `"$AWB_CMD" <command> --help` 和 `"$AWB_CMD" model-options --modelGroupCode <g>` 为准
+## 2. 模块地图
 
-按任务选择文件：
+| 模块 | 处理的问题 | 入口 |
+|------|-----------|------|
+| 认证 | 登录状态、微信扫码 / 手机验证码、token 清理 | [`modules/auth.md`](modules/auth.md) |
+| 工作区 | 账号、团队切换、项目组切换 / 创建 / 更新 / 成员 | [`modules/workspace.md`](modules/workspace.md) |
+| 积分计费 | 团队 vs 项目组积分、积分包、充值、兑换、发票 | [`modules/billing.md`](modules/billing.md) |
+| 模型发现 | 挑模型、读参数定义、解读参数白名单与通道差价 | [`modules/model.md`](modules/model.md) |
+| 素材上传 | 通用素材、主体素材（三视图 / 正侧背） | [`modules/upload.md`](modules/upload.md) |
+| 生图 | 标准生图、参考图、批量 | [`modules/image.md`](modules/image.md) |
+| 生视频 | 首帧 / 首尾帧 / 参考 / 故事板 / 批量 | [`modules/video.md`](modules/video.md) |
+| 任务跟踪 | 列表、阻塞等结果、拿结果链接 | [`modules/task.md`](modules/task.md) |
 
-- 账号与项目组：见 `capabilities/auth-and-account.md`
-- 模型选择：见 `capabilities/model-discovery.md`
-- 生图：见 `capabilities/create-image.md`
-- 生视频：见 `capabilities/create-video.md`
-- 素材上传 / 内部主体素材：见 `capabilities/upload-and-assets.md`
-- 任务查询：见 `capabilities/task-management.md`
-- 积分与开票：见 `capabilities/billing.md`
+## 3. 深入参考
 
-按基础 workflow 选择用法：
+只有对应 module 把你引到这里时才读：
 
-- 简单文生图：见 `workflows/simple-text-to-image.md`
-- 参考图生图 / 多图生图：见 `workflows/reference-image-generation.md`
-- 批量生图：见 `workflows/batch-image-generation.md`
-- 首帧生视频：见 `workflows/first-frame-video.md`
-- 首尾帧生视频：见 `workflows/first-last-frame-video.md`
-- 多参考生视频：见 `workflows/multi-reference-video.md`
-- 故事板生视频：见 `workflows/storyboard-video.md`
-- 批量生视频：见 `workflows/batch-video-generation.md`
+- [`references/subject-upload.md`](references/subject-upload.md) — 主体素材完整流程（四角度 + 组名拼接 + `nextRefSubject` 接力）
+- [`references/model-options-read.md`](references/model-options-read.md) — 怎么读 `model-options` 输出与参数白名单
+- [`references/batch-input-file.md`](references/batch-input-file.md) — `image-create-batch` / `video-create-batch` 输入文件格式
+- [`references/storyboard.md`](references/storyboard.md) — 故事板模式 `--storyboardPrompts` 写法与适用模型
 
-需要检查版本或更新时再看：
+## 4. 全局执行规则
 
-- Skill 版本：`VERSION`
-- 兼容信息：`compat.json`
-- 更新检查：`scripts/check-update.sh`
-- 更新执行：`scripts/update.sh`
-- 命令探测：`scripts/resolve-awb-cmd.sh`
+- 默认输出格式 `-f json`；长输出用 `jq` 摘要，不要把整段 JSON 或整张模型表回显给用户
+- 用 `--model "<关键词>"` 缩小模型表，别先扫全量
+- 创作命令优先 `image-fee` / `video-fee` 预算；只有结构复杂时再用 `--dryRun true`
+- 参数以 `paramKeys` 为准；不在白名单的参数不传（GPT Image 2 无 `quality` / `generateNum`；千问无 `ratio`；FLUX 用 `customResolution`）
+- 破坏性 / 写入命令（`auth-clear`、`team-select`、`project-group-*`、`redeem`、`invoice-apply`）支持 `--dryRun true`，没把握时先预览
+- 涉及项目组积分的操作（所有创作命令、`points`、`tasks`）默认挂当前项目组；可用 `--projectGroupNo` 覆盖
+- 创作失败先看项目组而非团队（`project-group-current` + `points`）
 
-执行规则：
+## 5. 版本与更新
 
-- 默认优先用 `awb`
-- 如果机器上没有 `awb`，且 `opencli awb --help` 可用，再退回 `opencli awb`
-- 默认优先 `-f json`
-- 能用关键词过滤时，优先 `--model "<关键词>"`，不要先扫全量模型表
-- 需要读长输出时，优先用 `rg` 过滤文本行；需要读 JSON 时，优先用 `jq` 只摘必要字段
-- 优先先跑 `image-fee` / `video-fee`；只有结构复杂时再用 `--dryRun true`
-- 不要把整段 JSON 或整张模型表原样回显给用户，只总结必要字段
-- 遇到参数细节、默认值、必填项或模式差异时，优先看命令自己的 `--help` 和 `model-options`
-- workflow 只保留单元化基础用法，不写复杂串联生产流
+- 本地 skill 版本：[`VERSION`](VERSION)
+- 兼容信息：[`compat.json`](compat.json)
+- 检查 / 执行更新：`scripts/check-update.sh` / `scripts/update.sh`
+- AWB 命令探测：`scripts/resolve-awb-cmd.sh`
