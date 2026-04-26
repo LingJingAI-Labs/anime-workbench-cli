@@ -11,6 +11,13 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "local skill version:  $LOCAL_VERSION"
+  echo "repo check skipped: $REPO_ROOT is not a git repo"
+  echo "If this skill was installed from npm/postinstall, update the AWB CLI package and rerun install."
+  exit 0
+fi
+
 git -C "$REPO_ROOT" fetch --quiet origin main || {
   echo "failed to fetch origin/main" >&2
   exit 2

@@ -44,6 +44,22 @@ Update mechanism docs:
 
 ## Install
 
+### Standalone CLI (Recommended)
+
+For agents, e2b, CI, and normal terminal usage, install the standalone command first:
+
+```bash
+npm install -g @lingjingai/awb-cli
+awb --help
+```
+
+When developing from this repository:
+
+```bash
+npm install -g ./packages/awb-core ./packages/awb-cli
+awb --help
+```
+
 ### opencli Plugin
 
 Prerequisite:
@@ -64,25 +80,15 @@ Or:
 npm install -g git+https://github.com/LingJingAI-Labs/anime-workbench-cli.git
 ```
 
-After installation, `postinstall` automatically places the plugin under `~/.opencli/plugins/awb`.
+After installation, `postinstall` automatically places the plugin under `~/.opencli/plugins/awb` and syncs the Agent skill to `~/.cc-switch/skills/awb`.
 
-It also patches the AWB-specific presentation layer inside `opencli`, including the brand banner, Chinese datetime formatting, and centered AWB table headers.
+`opencli awb` is the compatibility entry. The standalone `awb` command is the preferred polished entry with the brand banner and grouped help.
 
 Verify installation:
 
 ```bash
 opencli awb --help
 ```
-
-### Standalone CLI
-
-The standalone CLI scaffold is already available in this repository:
-
-```bash
-node packages/awb-cli/bin/awb.js --help
-```
-
-The standalone CLI is already published as `@lingjingai/awb-cli`.
 
 If the standalone CLI does not yet have its own local session, it reuses the existing AWB auth and project-group state to avoid duplicate login. Supported legacy paths include:
 
@@ -95,14 +101,14 @@ If multiple records exist, the CLI picks the newest one with the freshest token.
 ## Local Development
 
 ```bash
-cd /Users/zheyong/Developer/anime-workbench-cli
+cd /path/to/anime-workbench-cli
 npm install -g .
 ```
 
 Or refresh the local plugin install directly:
 
 ```bash
-node /Users/zheyong/Developer/anime-workbench-cli/install.mjs
+node /path/to/anime-workbench-cli/install.mjs
 ```
 
 Validate code:
@@ -138,6 +144,8 @@ bash skills/awb/scripts/check-update.sh
 bash skills/awb/scripts/update.sh
 ```
 
+If your Agent uses a custom skill directory, set `AWB_SKILL_INSTALL_DIR=/path/to/awb` before installing or updating.
+
 Skill workflows only keep atomic basic usage, for example:
 
 - simple text-to-image
@@ -150,6 +158,33 @@ Skill workflows only keep atomic basic usage, for example:
 - batch video generation
 
 ## Login
+
+For automation, e2b, and CI, use an AWB access key directly. This avoids QR login and token refresh:
+
+```bash
+export AWB_ACCESS_KEY=<access_key>
+# Legacy alias: AWB_CODE=<access_key>
+
+awb auth-status -f json
+awb me -f json
+```
+
+You can also save the access key to the local AWB auth file with `0600` permissions:
+
+```bash
+opencli awb login-key --accessKey <access_key>
+# when the env var is already set:
+opencli awb login-key --fromEnv true
+# save without online verification:
+opencli awb login-key --accessKey <access_key> --skipVerify true
+```
+
+On startup, the CLI looks upward from the current directory for the nearest `.env` and never overrides existing shell environment variables:
+
+```dotenv
+AWB_ACCESS_KEY=<access_key>
+# AWB_CODE=<access_key>  # legacy alias; not a user_id
+```
 
 After registering on the official website and linking WeChat, sign in by scanning the QR code in terminal:
 
@@ -194,6 +229,24 @@ opencli awb project-group-current -f json
 opencli awb project-group-users -f json
 opencli awb project-group-create --name "CLI Project" -f json
 opencli awb project-group-select --projectGroupNo <projectGroupNo> -f json
+```
+
+Project / e2b sandbox usage summary:
+
+```bash
+opencli awb usage-summary \
+  --projectGroupNo <projectGroupNo> \
+  --since "2026-04-27 00:00:00" \
+  --startProjectPointBalance 10000 \
+  --pointPriceYuan 0.01 \
+  -f json
+
+# Or inject env vars from the backend and query directly
+AWB_PROJECT_GROUP_NO=<projectGroupNo> \
+AWB_USAGE_STARTED_AT=1777219200000 \
+AWB_START_PROJECT_POINT_BALANCE=10000 \
+AWB_POINT_PRICE_YUAN=0.01 \
+opencli awb usage-summary -f json
 ```
 
 ## Model Discovery

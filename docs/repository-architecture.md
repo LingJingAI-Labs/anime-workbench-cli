@@ -29,8 +29,8 @@ anime-workbench-cli
 │       ├── SKILL.md
 │       ├── VERSION
 │       ├── compat.json
-│       ├── capabilities/
-│       ├── workflows/
+│       ├── modules/
+│       ├── references/
 │       └── scripts/
 ├── index.js
 ├── install.mjs

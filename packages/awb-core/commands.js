@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +6,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import QRCode from 'qrcode';
 import {
+  API_ORIGIN,
   apiFetch,
   clearAuth,
   ensureAuth,
@@ -15,26 +15,31 @@ import {
   flattenRecord,
   loadAuth,
   loadState,
+  maskAccessKey,
   normalizeCode,
   parseJsonArg,
   REDEEM_CODE_RE,
   readImageMetadata,
+  resolveEnvProjectGroupNo,
+  resolveRuntimeAccessKey,
   resolveProjectGroupNo,
   saveAuth,
   saveLoginPayload,
   saveState,
   SEND_CODE_PRODUCT_CODE,
   SEND_CODE_SCENE_ID,
+  PRODUCT_CODE,
   safeAuthSummary,
   sleep,
   splitCsv,
+  SOURCE,
   TASK_UPLOAD_SCENE,
   uploadLocalFile,
   uploadLocalFiles,
 } from './common.js';
 
 const SITE = 'awb';
-const TERMINAL_TASK_STATES = new Set(['SUCCESS', 'FAIL', 'FAILED', 'ERROR', 'CANCEL', 'CANCELLED']);
+const TERMINAL_TASK_STATES = new Set(['SUCCESS', 'FAIL', 'FAILED', 'ERROR', 'CANCEL', 'CANCELED', 'CANCELLED', 'TIMEOUT']);
 const FEED_TASK_TYPES = ['IMAGE_CREATE', 'VIDEO_GROUP', 'VIDEO_CREATE', 'IMAGE_EDIT', 'LIP_SYNC'];
 const POINT_PACKAGE_CACHE_PATH = path.join(os.homedir(), '.opencli', 'awb-point-packages.json');
 const POINT_RECORD_CACHE_PATH = path.join(os.homedir(), '.opencli', 'awb-point-records.json');
@@ -159,14 +164,6 @@ function withAliases(record, mapping = {}) {
 
 function withAliasesRows(rows, mapping = {}) {
   return (Array.isArray(rows) ? rows : []).map((item) => withAliases(item, mapping));
-}
-
-function readJsonSync(filePath) {
-  try {
-    return JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
-  } catch {
-    return null;
-  }
 }
 
 function isTerminalStream(stream) {
@@ -858,9 +855,15 @@ async function uploadSubjectAssets(kwargs) {
 async function previewUploadFiles(kwargs) {
   const files = parseListArg(kwargs.files);
   const inspected = await inspectLocalFiles(files);
+  const sceneType = kwargs.sceneType || TASK_UPLOAD_SCENE.IMAGE_CREATE;
   return inspected.map((item) => ({
     ...item,
-    sceneType: kwargs.sceneType || TASK_UPLOAD_SCENE.IMAGE_CREATE,
+    sceneType,
+    backendPath: buildDryRunBackendPath(item.filePath, sceneType),
+    objectName: null,
+    publicUrl: null,
+    signedUrl: null,
+    groupId: '__dry_run__',
     dryRun: true,
     action: 'upload-files',
   }));
@@ -1062,6 +1065,167 @@ function trimToNull(value) {
   if (value == null) return null;
   const text = String(value).trim();
   return text ? text : null;
+}
+
+function accessKeySourceLabel(source, sourceName) {
+  if (source === 'env') return sourceName ? `env:${sourceName}` : 'env';
+  if (source === 'saved') return 'saved';
+  if (source === 'argument') return 'argument';
+  return source ?? null;
+}
+
+function resolveLoginKeyInput(kwargs) {
+  const explicitAccessKey = trimToNull(kwargs.accessKey);
+  if (explicitAccessKey) {
+    return { accessKey: explicitAccessKey, source: 'argument', sourceName: null };
+  }
+  if (toBool(kwargs.fromEnv)) {
+    const envAccessKey = resolveRuntimeAccessKey(null);
+    if (envAccessKey?.source === 'env') return envAccessKey;
+  }
+  return null;
+}
+
+async function verifyLoginAccessKey(accessKey) {
+  const response = await fetch(`${API_ORIGIN}/api/anime/user/account/userInfo`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      productcode: PRODUCT_CODE,
+      source: SOURCE,
+      timestamp: String(Date.now()),
+      'X-Access-Key': accessKey,
+    },
+    body: '{}',
+  });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (
+    !response.ok ||
+    !payload ||
+    payload?.code === 401 ||
+    (payload?.code != null && payload.code !== 200) ||
+    payload?.success === false
+  ) {
+    throw new Error(payload?.msg || payload?.message || 'AWB access key 验证失败，请检查 key 是否正确或是否有权限。');
+  }
+  const data = payload?.data ?? payload ?? {};
+  return {
+    verified: true,
+    userId: data?.userId ?? data?.id ?? null,
+    userName: data?.userName ?? data?.nickName ?? data?.name ?? null,
+  };
+}
+
+function parseUsageTimeMs(value, fallback = null) {
+  const text = trimToNull(value);
+  if (!text) return fallback;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) {
+    return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+  }
+  const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(text)
+    ? `${text.replace(' ', 'T')}+08:00`
+    : text;
+  const parsed = Date.parse(normalized);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`无法解析时间: ${text}。请使用毫秒时间戳或 ISO 时间，例如 2026-04-27T00:00:00+08:00。`);
+  }
+  return parsed;
+}
+
+function resolveUsageSinceMs(kwargs) {
+  const explicitSinceMs = parseUsageTimeMs(kwargs.sinceMs, null);
+  if (explicitSinceMs != null) return explicitSinceMs;
+  const explicitSince = parseUsageTimeMs(kwargs.since, null);
+  if (explicitSince != null) return explicitSince;
+  const envSince = parseUsageTimeMs(
+    process.env.AWB_USAGE_STARTED_AT ??
+    process.env.AWB_PROJECT_STARTED_AT ??
+    process.env.E2B_PROJECT_STARTED_AT ??
+    process.env.SANDBOX_STARTED_AT ??
+    null,
+    null,
+  );
+  if (envSince != null) return envSince;
+  const lastHours = toNumberOrNull(kwargs.lastHours);
+  if (lastHours != null && lastHours > 0) return Date.now() - lastHours * 3600 * 1000;
+  return null;
+}
+
+function resolveUsageStartBalance(kwargs) {
+  return toNumberOrNull(
+    kwargs.startProjectPointBalance ??
+    kwargs.startBalance ??
+    process.env.AWB_START_PROJECT_POINT_BALANCE ??
+    process.env.AWB_PROJECT_START_POINT_BALANCE ??
+    process.env.SANDBOX_START_PROJECT_POINT_BALANCE,
+  );
+}
+
+function resolveUsagePointPriceYuan(kwargs) {
+  return toNumberOrNull(
+    kwargs.pointPriceYuan ??
+    kwargs.yuanPerPoint ??
+    process.env.AWB_POINT_PRICE_YUAN ??
+    process.env.AWB_YUAN_PER_POINT,
+  );
+}
+
+async function resolvePreviewProjectGroupNo(explicit) {
+  const explicitProjectGroupNo = trimToNull(explicit);
+  if (explicitProjectGroupNo) return explicitProjectGroupNo;
+  const envProjectGroupNo = resolveEnvProjectGroupNo();
+  if (envProjectGroupNo) return envProjectGroupNo;
+  return trimToNull((await loadState().catch(() => ({})))?.currentProjectGroupNo);
+}
+
+function calculateUsageCostYuan(points, pointPriceYuan) {
+  if (points == null || pointPriceYuan == null) return null;
+  return Math.round(Number(points) * Number(pointPriceYuan) * 10000) / 10000;
+}
+
+function taskTimeMs(row) {
+  return parseUsageTimeMs(row?.gmtCreate ?? row?.gmtModified, null);
+}
+
+function taskUsageBucket(taskType) {
+  const normalized = normalizeFeedTaskType(String(taskType ?? '').trim().toUpperCase());
+  if (normalized === 'VIDEO_GROUP' || normalized === 'VIDEO_CREATE') return 'video';
+  if (normalized === 'IMAGE_EDIT') return 'imageEdit';
+  return 'image';
+}
+
+function createUsageBucket() {
+  return {
+    taskCount: 0,
+    successTaskCount: 0,
+    failedTaskCount: 0,
+    runningTaskCount: 0,
+    resultCount: 0,
+    pointTotal: 0,
+  };
+}
+
+function addTaskToUsageBucket(bucket, row) {
+  const status = String(row?.taskStatus ?? '').trim().toUpperCase();
+  const points = toNumberOrNull(row?.pointNo) ?? 0;
+  const isSuccess = status === 'SUCCESS';
+  const isFailed = ['FAILED', 'FAIL', 'ERROR', 'CANCEL', 'CANCELED', 'CANCELLED', 'TIMEOUT'].includes(status);
+  bucket.taskCount += 1;
+  if (isSuccess) {
+    bucket.successTaskCount += 1;
+    bucket.resultCount += Math.max(0, toInt(row?.resultCount, 0));
+    bucket.pointTotal += points;
+  } else if (isFailed) {
+    bucket.failedTaskCount += 1;
+  } else {
+    bucket.runningTaskCount += 1;
+  }
 }
 
 function escapeRegExp(text) {
@@ -2246,35 +2410,6 @@ function formatDateTime(value) {
   }
 }
 
-function resolveViewerPermissionSync() {
-  const stateCandidates = [
-    process.env.AWB_STATE_PATH,
-    path.join(os.homedir(), '.opencli', 'awb-state.json'),
-    path.join(os.homedir(), '.lingjingai', 'awb', 'state.json'),
-  ].filter(Boolean);
-  for (const statePath of stateCandidates) {
-    const state = readJsonSync(statePath);
-    const permission = normalizeViewerPermission(state?.currentPermission ?? state?.currentUserPermission);
-    if (permission) return permission;
-  }
-  const authCandidates = [
-    process.env.AWB_AUTH_PATH,
-    path.join(os.homedir(), '.opencli', 'awb-auth.json'),
-    path.join(os.homedir(), '.lingjingai', 'awb', 'auth.json'),
-    path.join(os.homedir(), '.animeworkbench_auth.json'),
-  ].filter(Boolean);
-  for (const authPath of authCandidates) {
-    const auth = readJsonSync(authPath);
-    const permission = normalizeViewerPermission(auth?.permission ?? auth?.currentPermission);
-    if (permission) return permission;
-  }
-  return null;
-}
-
-function isInternalViewerSync() {
-  return resolveViewerPermissionSync() === '1';
-}
-
 function parseModelDisplayScopes(value) {
   return String(value ?? '')
     .split(',')
@@ -2311,7 +2446,7 @@ async function resolveViewerPermission(kwargs = {}) {
 async function assertInternalViewer(kwargs = {}) {
   const permission = await resolveViewerPermission(kwargs);
   if (permission === '1') return;
-  throw new Error('`subject-upload` 仅对内部员工开放。');
+  throw new Error('主体素材上传 / 发布命令仅对内部员工开放。');
 }
 
 async function fetchModelRowsByTaskType(taskType, taskPrompt = '', viewerPermission = null) {
@@ -3040,25 +3175,44 @@ function filterModelRows(rows, kwargs = {}) {
 
 function normalizeTaskRows(payload) {
   const list = firstArray(payload);
-  return list.map((item) => ({
-    taskId: item?.taskId ?? null,
-    taskType: item?.taskType ?? null,
-    taskStatus: item?.taskStatus ?? item?.status ?? null,
-    modelName: item?.modelName ?? null,
-    modelGroupCode: item?.modelGroupCode ?? null,
-    handlerCode: item?.handlerCode ?? null,
-    pointNo: item?.pointNo ?? null,
-    gmtCreate: item?.gmtCreate ?? null,
-    gmtModified: item?.gmtModified ?? null,
-    taskPrompt: item?.taskPrompt ?? null,
-    resultCount: Array.isArray(item?.resultFileList) ? item.resultFileList.length : 0,
-    firstResultUrl: item?.resultFileDisplayList?.[0] ?? item?.resultFileList?.[0] ?? null,
-    resultFileList: JSON.stringify(item?.resultFileList ?? []),
-    resultFileDisplayList: JSON.stringify(item?.resultFileDisplayList ?? []),
-    errorMsg: item?.errorMsg ?? item?.resultMsg ?? null,
-    isTerminal: TERMINAL_TASK_STATES.has(item?.taskStatus ?? item?.status ?? ''),
-    raw: JSON.stringify(item),
-  }));
+  return list.map((item) => {
+    const resultFileList = Array.isArray(item?.resultFileList) ? item.resultFileList : [];
+    const resultFileDisplayList = Array.isArray(item?.resultFileDisplayList) ? item.resultFileDisplayList : [];
+    const createdAt =
+      item?.gmtCreate ??
+      item?.createTime ??
+      item?.createdAt ??
+      item?.createdTime ??
+      item?.taskCreateTime ??
+      null;
+    const modifiedAt =
+      item?.gmtModified ??
+      item?.updateTime ??
+      item?.updatedAt ??
+      item?.modifiedAt ??
+      item?.taskUpdateTime ??
+      null;
+    const taskStatus = item?.taskStatus ?? item?.status ?? null;
+    return {
+      taskId: item?.taskId ?? null,
+      taskType: item?.taskType ?? null,
+      taskStatus,
+      modelName: item?.modelName ?? null,
+      modelGroupCode: item?.modelGroupCode ?? null,
+      handlerCode: item?.handlerCode ?? null,
+      pointNo: item?.pointNo ?? null,
+      gmtCreate: createdAt,
+      gmtModified: modifiedAt,
+      taskPrompt: item?.taskPrompt ?? null,
+      resultCount: Math.max(resultFileList.length, resultFileDisplayList.length),
+      firstResultUrl: resultFileDisplayList[0] ?? resultFileList[0] ?? null,
+      resultFileList: JSON.stringify(resultFileList),
+      resultFileDisplayList: JSON.stringify(resultFileDisplayList),
+      errorMsg: item?.errorMsg ?? item?.resultMsg ?? null,
+      isTerminal: TERMINAL_TASK_STATES.has(String(taskStatus ?? '').trim().toUpperCase()),
+      raw: JSON.stringify(item),
+    };
+  });
 }
 
 function normalizeProjectGroupRecord(item, selectedProjectGroupNo) {
@@ -3187,11 +3341,17 @@ function presentAuthStatus(summary) {
   return withAliases(
     {
       ...summary,
+      authTypeText: summary?.authType ?? null,
+      accessKeySourceText: accessKeySourceLabel(summary?.accessKeySource, summary?.accessKeySourceName),
       expiresAtText: formatDateTime(summary?.expiresAt),
       updatedAtText: formatDateTime(summary?.updatedAt),
     },
     {
       loginState: '登录状态',
+      authTypeText: '认证方式',
+      hasAccessKey: '有AccessKey',
+      accessKeyPreview: 'AccessKey',
+      accessKeySourceText: 'AccessKey来源',
       hasToken: '有令牌',
       hasRefreshToken: '有续期令牌',
       expiresAtText: '过期时间',
@@ -3208,6 +3368,19 @@ function presentLoginResult(result) {
     needsBind: '需绑定手机号',
     currentGroupName: '当前团队',
     groupCount: '团队数',
+  });
+}
+
+function presentLoginKeyResult(result) {
+  return withAliases(result, {
+    status: '状态',
+    loginMethod: '登录方式',
+    saved: '已保存',
+    verified: '已验证',
+    accessKeyPreview: 'AccessKey',
+    accessKeySourceText: '来源',
+    userId: '用户ID',
+    userName: '用户名',
   });
 }
 
@@ -3280,6 +3453,30 @@ function presentPointRecordRows(rows) {
   });
 }
 
+function presentUsageSummary(summary) {
+  return withAliases(summary, {
+    projectGroupName: '项目组',
+    sinceText: '开始时间',
+    currentProjectPointBalance: '当前项目组积分',
+    estimatedConsumedPoints: '消耗积分',
+    consumedProjectPoints: '余额消耗',
+    projectPointBalanceDelta: '余额变化消耗',
+    balanceIncreasedPoints: '余额增加',
+    taskPointTotal: '任务积分合计',
+    imageTaskCount: '图片任务',
+    imageResultCount: '图片结果',
+    imagePointTotal: '图片积分',
+    videoTaskCount: '视频任务',
+    videoResultCount: '视频结果',
+    videoPointTotal: '视频积分',
+    estimatedCostYuan: '消耗金额(元)',
+    imageCostYuan: '图片金额(元)',
+    videoCostYuan: '视频金额(元)',
+    unattributedPointTotal: '未归因积分',
+    unattributedCostYuan: '未归因金额(元)',
+  });
+}
+
 function presentPointOrder(result) {
   return withAliases(result, {
     packageNo: '套餐编号',
@@ -3316,6 +3513,7 @@ function taskTypeLabel(value) {
   return {
     IMAGE_CREATE: '生图',
     VIDEO_CREATE: '生视频',
+    VIDEO_GROUP: '生视频',
     IMAGE_EDIT: '图片编辑',
   }[normalized] ?? value;
 }
@@ -3361,7 +3559,7 @@ function buildUploadSubjectRegisterHint(item) {
   const sceneType = trimToNull(item?.sceneType);
   const mimeType = String(item?.mimeType ?? '').toLowerCase();
   if (sceneType !== TASK_UPLOAD_SCENE.VIDEO_CREATE || !mimeType.startsWith('image/')) return null;
-  return `subject-upload --name <角色名> --primaryUrl "${backendPath}"`;
+  return `${runtimeCommandPrefix()} subject-publish --name <角色名> --primaryUrl "${backendPath}"`;
 }
 
 function presentUploadRows(rows) {
@@ -4637,6 +4835,156 @@ async function fetchTaskFeed(kwargs) {
   }));
 }
 
+async function fetchTaskFeedSince({
+  taskType,
+  projectGroupNo,
+  sinceMs,
+  untilMs = Date.now(),
+  pageSize = 100,
+  maxPages = 20,
+}) {
+  const rows = [];
+  const seen = new Set();
+  let minTime = untilMs;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const batch = await fetchTaskFeed({
+      taskType,
+      projectGroupNo,
+      pageSize,
+      minTime,
+    });
+    if (!batch.length) break;
+
+    let oldestMs = null;
+    for (const row of batch) {
+      const createdMs = taskTimeMs(row);
+      if (createdMs != null) {
+        oldestMs = oldestMs == null ? createdMs : Math.min(oldestMs, createdMs);
+      }
+      const dedupeKey = trimToNull(row.taskId);
+      if (dedupeKey) {
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+      }
+      const afterSince = sinceMs == null || createdMs == null || createdMs >= sinceMs;
+      const beforeUntil = createdMs == null || createdMs <= untilMs;
+      if (afterSince && beforeUntil) {
+        rows.push(row);
+      }
+    }
+
+    if (oldestMs == null) break;
+    if (sinceMs != null && oldestMs < sinceMs) break;
+    if (oldestMs >= minTime) break;
+    minTime = oldestMs - 1;
+  }
+
+  return rows;
+}
+
+async function buildUsageSummary(kwargs) {
+  const projectGroupNo = await resolveProjectGroupNo(kwargs.projectGroupNo);
+  const sinceMs = resolveUsageSinceMs(kwargs);
+  const untilMs = parseUsageTimeMs(kwargs.untilMs ?? kwargs.until, Date.now());
+  if (sinceMs != null && untilMs < sinceMs) {
+    throw new Error('结束时间不能早于开始时间。请检查 `--since/--sinceMs` 与 `--until/--untilMs`。');
+  }
+  const startProjectPointBalance = resolveUsageStartBalance(kwargs);
+  const pointPriceYuan = resolveUsagePointPriceYuan(kwargs);
+  const pageSize = Math.min(Math.max(toInt(kwargs.pageSize, 100), 1), 200);
+  const maxPages = Math.min(Math.max(toInt(kwargs.maxPages, 20), 1), 200);
+  const projectGroup = await fetchProjectGroupSummary(projectGroupNo);
+  const taskTypes = ['IMAGE_CREATE', 'IMAGE_EDIT', 'VIDEO_GROUP'];
+  const taskGroups = await Promise.all(taskTypes.map((taskType) =>
+    fetchTaskFeedSince({
+      taskType,
+      projectGroupNo,
+      sinceMs,
+      untilMs,
+      pageSize,
+      maxPages,
+    }),
+  ));
+  const tasks = taskGroups.flat();
+  const buckets = {
+    image: createUsageBucket(),
+    imageEdit: createUsageBucket(),
+    video: createUsageBucket(),
+  };
+  for (const row of tasks) {
+    addTaskToUsageBucket(buckets[taskUsageBucket(row.feedTaskType ?? row.taskType)], row);
+  }
+  const taskPointTotal = buckets.image.pointTotal + buckets.imageEdit.pointTotal + buckets.video.pointTotal;
+  const currentProjectPointBalance = toNumberOrNull(projectGroup.projectGroupIntegralCurrent ?? projectGroup.pointBalance);
+  const projectPointBalanceDelta =
+    startProjectPointBalance != null && currentProjectPointBalance != null
+      ? startProjectPointBalance - currentProjectPointBalance
+      : null;
+  const consumedProjectPoints = projectPointBalanceDelta == null ? null : Math.max(0, projectPointBalanceDelta);
+  const balanceIncreasedPoints = projectPointBalanceDelta == null ? null : Math.max(0, -projectPointBalanceDelta);
+  const estimatedConsumedPoints =
+    projectPointBalanceDelta == null || projectPointBalanceDelta < 0
+      ? taskPointTotal
+      : consumedProjectPoints;
+  const unattributedPointTotal = consumedProjectPoints == null
+    ? 0
+    : Math.max(0, consumedProjectPoints - taskPointTotal);
+  const billingBasis = projectPointBalanceDelta == null
+    ? 'task_point_sum'
+    : projectPointBalanceDelta < 0
+      ? 'task_point_sum_balance_increased'
+      : 'project_balance_delta';
+  const summary = {
+    projectGroupNo,
+    projectGroupName: projectGroup.projectGroupName ?? null,
+    sinceMs,
+    sinceText: sinceMs == null ? null : formatDateTime(sinceMs),
+    untilMs,
+    untilText: formatDateTime(untilMs),
+    pageSize,
+    maxPages,
+    currentProjectPointBalance,
+    projectPointMax: projectGroup.projectGroupIntegralMax ?? null,
+    startProjectPointBalance,
+    consumedProjectPoints,
+    projectPointBalanceDelta,
+    balanceIncreasedPoints,
+    estimatedConsumedPoints,
+    taskPointTotal,
+    pointPriceYuan,
+    estimatedCostYuan: calculateUsageCostYuan(estimatedConsumedPoints, pointPriceYuan),
+    imageCostYuan: calculateUsageCostYuan(buckets.image.pointTotal + buckets.imageEdit.pointTotal, pointPriceYuan),
+    videoCostYuan: calculateUsageCostYuan(buckets.video.pointTotal, pointPriceYuan),
+    unattributedPointTotal,
+    unattributedCostYuan: calculateUsageCostYuan(unattributedPointTotal, pointPriceYuan),
+    billingBasis,
+    image: buckets.image,
+    imageEdit: buckets.imageEdit,
+    video: buckets.video,
+    imageTaskCount: buckets.image.successTaskCount + buckets.imageEdit.successTaskCount,
+    imageResultCount: buckets.image.resultCount + buckets.imageEdit.resultCount,
+    imagePointTotal: buckets.image.pointTotal + buckets.imageEdit.pointTotal,
+    videoTaskCount: buckets.video.successTaskCount,
+    videoResultCount: buckets.video.resultCount,
+    videoPointTotal: buckets.video.pointTotal,
+    scannedTaskCount: tasks.length,
+    taskWindowLimited: sinceMs == null,
+  };
+  if (toBool(kwargs.includeTasks)) {
+    summary.tasks = tasks.map((row) => ({
+      taskId: row.taskId,
+      taskType: row.feedTaskType ?? row.taskType,
+      taskStatus: row.taskStatus,
+      modelName: row.modelName,
+      pointNo: row.pointNo,
+      gmtCreate: row.gmtCreate,
+      resultCount: row.resultCount,
+    }));
+  }
+  return presentUsageSummary(summary);
+}
+
 async function findTaskOnce(kwargs) {
   const rows = await fetchTaskFeed({
     taskType: kwargs.taskType,
@@ -5089,7 +5437,7 @@ async function updateProjectGroup(kwargs) {
 }
 
 async function previewProjectGroupUpdate(kwargs) {
-  const projectGroupNo = kwargs.projectGroupNo || (await loadState())?.currentProjectGroupNo || null;
+  const projectGroupNo = await resolvePreviewProjectGroupNo(kwargs.projectGroupNo);
   const body = {
     projectGroupNo,
   };
@@ -5099,9 +5447,17 @@ async function previewProjectGroupUpdate(kwargs) {
   if (kwargs.point != null && String(kwargs.point).trim() !== '') {
     body.point = toInt(kwargs.point, 0);
   }
+  if (Object.keys(body).length === 1) {
+    throw new Error('至少提供一个修改项：`--name` 或 `--point`。');
+  }
   return {
     dryRun: true,
     action: 'project-group-update',
+    projectGroupNo,
+    projectGroupName: body.projectGroupName ?? null,
+    pointBalance: null,
+    projectGroupIntegralMax: body.point ?? null,
+    updated: false,
     request: body,
   };
 }
@@ -5115,9 +5471,7 @@ async function previewImageCreate(kwargs) {
     ? await resolveImagePromptParams(kwargs)
     : previewResolved;
   const { model, resolvedKwargs, promptParams } = previewResolved;
-  const projectGroupNo = kwargs.projectGroupNo
-    ? await resolveProjectGroupNo(kwargs.projectGroupNo)
-    : (await loadState())?.currentProjectGroupNo ?? null;
+  const projectGroupNo = await resolvePreviewProjectGroupNo(kwargs.projectGroupNo);
   const [feePayload, snapshot] = await Promise.all([
     apiFetch('/api/material/creation/imageCreateFeeCalc', {
       body: {
@@ -5161,9 +5515,7 @@ async function previewVideoCreate(kwargs) {
     ? await resolveVideoPromptParams(kwargs)
     : previewResolved;
   const { model, resolvedKwargs, promptParams, taskPrompt } = previewResolved;
-  const projectGroupNo = kwargs.projectGroupNo
-    ? await resolveProjectGroupNo(kwargs.projectGroupNo)
-    : (await loadState())?.currentProjectGroupNo ?? null;
+  const projectGroupNo = await resolvePreviewProjectGroupNo(kwargs.projectGroupNo);
   const [feePayload, snapshot] = await Promise.all([
     apiFetch('/api/material/creation/videoCreateFeeCalc', {
       body: {
@@ -5214,17 +5566,26 @@ async function previewVideoCreate(kwargs) {
 }
 
 export function registerAwbCommands(cli) {
-const canUseInternalCommands = isInternalViewerSync();
 cli({
   site: SITE,
   name: 'auth-clear',
   description: commandHelp('清空本地登录令牌', {
-    examples: ['opencli awb auth-clear'],
+    examples: ['opencli awb auth-clear --dryRun true', 'opencli awb auth-clear'],
+    hint: '`auth-clear` 只清本地保存的 token/access key；不会清除当前 shell 里的 AWB_ACCESS_KEY / AWB_CODE。',
+    dryRun: true,
   }),
   browser: false,
-  args: [],
+  args: [DRY_RUN_ARG],
   columns: ['已清空'],
-  func: async () => {
+  func: async (_page, kwargs) => {
+    if (toBool(kwargs.dryRun)) {
+      return presentAuthClearResult({
+        cleared: false,
+        dryRun: true,
+        action: 'auth-clear',
+        note: 'preview only; local auth files were not changed',
+      });
+    }
     await clearAuth();
     return presentAuthClearResult({ cleared: true });
   },
@@ -5238,8 +5599,75 @@ cli({
   }),
   browser: false,
   args: [],
-  columns: ['登录状态', '有令牌', '有续期令牌', '过期时间', '失效原因', '更新时间'],
+  columns: ['登录状态', '认证方式', 'AccessKey', 'AccessKey来源', '有令牌', '有续期令牌', '过期时间', '失效原因', '更新时间'],
   func: async () => presentAuthStatus(safeAuthSummary(await loadAuth())),
+});
+
+cli({
+  site: SITE,
+  name: 'login-key',
+  description: commandHelp('使用 AWB access key 登录', {
+    examples: [
+      'opencli awb login-key --accessKey <access_key>',
+      'AWB_ACCESS_KEY=<access_key> opencli awb login-key --fromEnv true',
+      'opencli awb login-key --accessKey <access_key> --skipVerify true',
+      'opencli awb auth-status -f json',
+    ],
+    hint: '默认会先验证 access key 再保存；access key 会以 0600 权限保存到本地 AWB auth 文件。如果只想无状态使用，直接设置 AWB_ACCESS_KEY 即可（AWB_CODE 是旧别名，不是 user_id）。',
+    dryRun: true,
+  }),
+  browser: false,
+  args: [
+    { name: 'accessKey', help: 'AWB access key。也可设置环境变量 AWB_ACCESS_KEY（或旧别名 AWB_CODE）' },
+    { name: 'fromEnv', help: '从 AWB_ACCESS_KEY / AWB_CODE 读取并保存。示例: --fromEnv true' },
+    { name: 'skipVerify', help: '跳过联网验证，只保存 access key。示例: --skipVerify true' },
+    DRY_RUN_ARG,
+  ],
+  columns: ['状态', '登录方式', '已保存', '已验证', 'AccessKey', '来源', '用户ID', '用户名'],
+  func: async (_page, kwargs) => {
+    const input = resolveLoginKeyInput(kwargs);
+    if (!input?.accessKey) {
+      throw new Error('缺少 access key。请传 `--accessKey <key>`，或设置 AWB_ACCESS_KEY 后使用 `--fromEnv true`（AWB_CODE 是旧别名）。');
+    }
+    const result = {
+      status: 'success',
+      loginMethod: 'access-key',
+      saved: !toBool(kwargs.dryRun),
+      verified: false,
+      accessKeyPreview: maskAccessKey(input.accessKey),
+      accessKeySourceText: accessKeySourceLabel(input.source, input.sourceName),
+      userId: null,
+      userName: null,
+    };
+    if (toBool(kwargs.dryRun)) {
+      return presentLoginKeyResult({
+        ...result,
+        dryRun: true,
+        action: 'login-key',
+      });
+    }
+    const verification = toBool(kwargs.skipVerify)
+      ? { verified: false, userId: null, userName: null }
+      : await verifyLoginAccessKey(input.accessKey);
+    await saveAuth({
+      accessKey: input.accessKey,
+      awbCode: input.accessKey,
+      loginMethod: 'access-key',
+      ...(verification.userId ? { userId: verification.userId } : {}),
+      ...(verification.userName ? { userName: verification.userName } : {}),
+      token: null,
+      refreshToken: null,
+      expiresAt: null,
+      lastAuthError: null,
+      authInvalidAt: null,
+    });
+    return presentLoginKeyResult({
+      ...result,
+      verified: verification.verified,
+      userId: verification.userId,
+      userName: verification.userName,
+    });
+  },
 });
 
 cli({
@@ -5361,6 +5789,8 @@ cli({
       return withAliases({
         dryRun: true,
         action: 'send-code',
+        sent: false,
+        phone: kwargs.phone,
         request: {
           phone: kwargs.phone,
           productCode: toInt(kwargs.productCode, SEND_CODE_PRODUCT_CODE),
@@ -5399,9 +5829,15 @@ cli({
   func: async (_page, kwargs) => {
     if (toBool(kwargs.dryRun)) {
       return presentLoginResult({
+        status: 'dry-run',
+        loginMethod: 'phone',
+        needsBind: false,
+        currentGroupName: null,
+        currentGroupId: null,
+        groupCount: 0,
         dryRun: true,
         action: 'phone-login',
-        request: { phone: kwargs.phone, code: kwargs.code },
+        request: { phone: kwargs.phone, code: '<hidden>' },
       });
     }
     const data = await apiFetch('/api/anime/user/account/phoneLogin', {
@@ -5445,15 +5881,21 @@ cli({
   func: async (_page, kwargs) => {
     const auth = await loadAuth();
     const tempToken = kwargs.tempToken || auth?.tempToken;
-    if (!tempToken) {
-      throw new Error(`No temp token found. Use \`${runtimeCommandPrefix()} login-qr\` first and wait for \`needBind\`.`);
-    }
     if (toBool(kwargs.dryRun)) {
       return presentLoginResult({
+        status: 'dry-run',
+        loginMethod: 'wechat-bind-phone',
+        needsBind: false,
+        currentGroupName: null,
+        currentGroupId: null,
+        groupCount: 0,
         dryRun: true,
         action: 'bind-phone',
-        request: { phone: kwargs.phone, code: kwargs.code, tempToken: '<hidden>' },
+        request: { phone: kwargs.phone, code: '<hidden>', tempToken: tempToken ? '<hidden>' : '<not-provided>' },
       });
+    }
+    if (!tempToken) {
+      throw new Error(`No temp token found. Use \`${runtimeCommandPrefix()} login-qr\` first and wait for \`needBind\`.`);
     }
 
     const data = await apiFetch('/api/anime/user/account/wechat/bindPhone', {
@@ -5531,7 +5973,18 @@ cli({
   columns: ['用户名', '当前团队', '团队积分'],
   func: async (_page, kwargs) => {
     if (toBool(kwargs.dryRun)) {
-      return { dryRun: true, action: 'team-select', request: { groupId: kwargs.groupId } };
+      return withAliases({
+        dryRun: true,
+        action: 'team-select',
+        userName: null,
+        currentGroupName: kwargs.groupId,
+        teamPointBalance: null,
+        request: { groupId: kwargs.groupId },
+      }, {
+        userName: '用户名',
+        currentGroupName: '当前团队',
+        teamPointBalance: '团队积分',
+      });
     }
     const response = await apiFetch('/api/anime/user/group/updateCurrentGroup', {
       body: { groupId: kwargs.groupId },
@@ -5628,7 +6081,15 @@ cli({
   columns: ['项目组编号', '项目组名称', '项目组余额', '项目组上限'],
   func: async (_page, kwargs) => {
     if (toBool(kwargs.dryRun)) {
-      return presentProjectGroupSummary({ dryRun: true, action: 'project-group-select', request: { projectGroupNo: kwargs.projectGroupNo } });
+      return presentProjectGroupSummary({
+        dryRun: true,
+        action: 'project-group-select',
+        projectGroupNo: kwargs.projectGroupNo,
+        projectGroupName: null,
+        pointBalance: null,
+        projectGroupIntegralMax: null,
+        request: { projectGroupNo: kwargs.projectGroupNo },
+      });
     }
     await apiFetch('/api/anime/workbench/projectGroup/setLastProjectGroup', {
       body: { projectGroupNo: kwargs.projectGroupNo },
@@ -5703,6 +6164,37 @@ cli({
       }),
     });
   },
+});
+
+cli({
+  site: SITE,
+  name: 'usage-summary',
+  description: commandHelp('按项目组汇总图片/视频任务数与积分消耗', {
+    examples: [
+      'opencli awb usage-summary --projectGroupNo <projectGroupNo> --since "2026-04-27 00:00:00"',
+      'opencli awb usage-summary --projectGroupNo <projectGroupNo> --sinceMs 1777219200000 --startProjectPointBalance 10000 --pointPriceYuan 0.01 -f json',
+      'AWB_PROJECT_GROUP_NO=<projectGroupNo> AWB_USAGE_STARTED_AT=1777219200000 AWB_START_PROJECT_POINT_BALANCE=10000 opencli awb usage-summary -f json',
+    ],
+    hint: '任务数按项目组实时查询；积分优先用启动余额 - 当前余额，未提供启动余额时回退为成功任务 pointNo 合计。',
+  }),
+  browser: false,
+  args: [
+    { name: 'projectGroupNo', help: '项目组编号。也可用 AWB_PROJECT_GROUP_NO / PROJECT_GROUP_NO / SANDBOX_PROJECT_GROUP_NO' },
+    { name: 'since', help: '开始时间，支持 ISO 或 `2026-04-27 00:00:00`（按 +08:00 解析）' },
+    { name: 'sinceMs', help: '开始时间戳，毫秒或秒。优先级高于 since' },
+    { name: 'until', help: '结束时间，默认当前时间' },
+    { name: 'untilMs', help: '结束时间戳，毫秒或秒。优先级高于 until' },
+    { name: 'lastHours', help: '不传 since 时可查最近 N 小时。示例: --lastHours 24' },
+    { name: 'startProjectPointBalance', help: '项目启动时项目组余额；也可用 AWB_START_PROJECT_POINT_BALANCE' },
+    { name: 'startBalance', help: 'startProjectPointBalance 的简写别名' },
+    { name: 'pointPriceYuan', help: '每积分人民币单价，用于估算金额。也可用 AWB_POINT_PRICE_YUAN' },
+    { name: 'yuanPerPoint', help: 'pointPriceYuan 的简写别名' },
+    { name: 'pageSize', type: 'int', default: 100, help: '每次拉取任务数，最大 200。默认: 100' },
+    { name: 'maxPages', type: 'int', default: 20, help: '每类任务最多翻页数。默认: 20' },
+    { name: 'includeTasks', help: '是否在 JSON 中附带扫描到的任务明细。示例: --includeTasks true' },
+  ],
+  columns: ['项目组', '开始时间', '图片任务', '图片结果', '图片积分', '图片金额(元)', '视频任务', '视频结果', '视频积分', '视频金额(元)', '消耗积分', '消耗金额(元)', '未归因积分', '未归因金额(元)', '任务积分合计', '余额消耗', '余额增加', '当前项目组积分'],
+  func: async (_page, kwargs) => buildUsageSummary(kwargs),
 });
 
 cli({
@@ -5842,11 +6334,16 @@ cli({
       throw new Error(`缺少 packageNo。请先执行 ${runtimeCommandPrefix()} point-packages 查看套餐编号。`);
     }
     if (toBool(kwargs.dryRun)) {
-      return {
+      return presentPointOrder({
         dryRun: true,
         action: 'point-purchase',
+        packageNo,
+        rechargeNo: null,
+        payStatus: null,
+        payStatusText: 'dry-run',
+        expireTime: null,
         request: { packageNo },
-      };
+      });
     }
 
     const payload = await apiFetch('/api/anime/member/order/recharge', {
@@ -6011,7 +6508,14 @@ cli({
       throw new Error('Invalid code format. Expected XXXX-XXXX-XXXX-XXXX.');
     }
     if (toBool(kwargs.dryRun)) {
-      return presentRedeemResult({ dryRun: true, action: 'redeem', request: { code } });
+      return presentRedeemResult({
+        dryRun: true,
+        action: 'redeem',
+        redeemed: false,
+        code,
+        teamPointBalance: null,
+        request: { code },
+      });
     }
     await apiFetch('/api/anime/member/redemption/redeemCode', {
       query: { code },
@@ -6242,7 +6746,7 @@ async function runSubjectUploadCommand(kwargs) {
   );
 }
 
-if (canUseInternalCommands) cli({
+cli({
   site: SITE,
   name: 'subject-upload',
   description: commandHelp('上传真人/角色图片到主体素材组，返回可复用的 subjectId', {
@@ -6265,7 +6769,7 @@ if (canUseInternalCommands) cli({
   func: async (_page, kwargs) => runSubjectUploadCommand({ ...kwargs, defaultSafePublishNaming: false }),
 });
 
-if (canUseInternalCommands) cli({
+cli({
   site: SITE,
   name: 'subject-publish',
   description: commandHelp('发布真人/角色图片为可复用主体资产，返回 Seedance/Grok 可直接使用的 subjectId', {
@@ -6288,7 +6792,7 @@ if (canUseInternalCommands) cli({
   func: async (_page, kwargs) => runSubjectUploadCommand({ ...kwargs, defaultSafePublishNaming: true }),
 });
 
-if (canUseInternalCommands) cli({
+cli({
   site: SITE,
   name: 'subject-publish-batch',
   description: commandHelp('批量发布真人/角色图片为可复用主体资产，返回可直接喂给 Seedance/Grok 的引用写法', {

@@ -8,8 +8,8 @@ Before using the CLI, make sure you have registered an account on the official A
 
 - https://animeworkbench.lingjingai.cn/home
 
-CLI 当前推荐通过微信扫码登录。  
-The CLI currently recommends signing in with a WeChat QR code.
+CLI 支持 access key 和微信扫码登录；自动化场景推荐 `AWB_ACCESS_KEY`（`AWB_CODE` 仅作旧别名，不是 user_id）。
+The CLI supports access-key and WeChat QR login; use `AWB_ACCESS_KEY` for automation (`AWB_CODE` is only a legacy alias, not a user_id).
 
 本地运行：
 
@@ -20,6 +20,11 @@ node bin/awb.js --help
 登录示例：
 
 ```bash
+export AWB_ACCESS_KEY=<access_key>
+node bin/awb.js auth-status -f json
+
+node bin/awb.js login-key --accessKey <access_key>
+node bin/awb.js login-key --accessKey <access_key> --skipVerify true
 node bin/awb.js login-qr
 ```
 

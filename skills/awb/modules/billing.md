@@ -5,6 +5,7 @@
 ## 1. 何时使用
 
 - 查看团队 / 项目组积分余额与上限
+- 汇总某个项目组 / e2b 沙箱从启动时间后的图片、视频数量与积分消耗
 - 创作前预估消耗（见 [`modules/image.md`](image.md) / [`modules/video.md`](video.md) 的 `*-fee`）
 - 买积分包 / 兑换积分码
 - 申请开票
@@ -22,6 +23,7 @@
 | 命令 | 用途 | 路由提醒 |
 |------|------|----------|
 | `points` | 一次看齐团队 + 项目组积分 | 创作失败先跑这个 |
+| `usage-summary` | 按项目组汇总图片/视频任务与积分/金额 | 推荐后台传 `--since` + `--startProjectPointBalance`；金额需传 `--pointPriceYuan` |
 | `point-packages` | 列出可买积分套餐（`packageNo` + 价格） | 充值前用来拿 `packageNo` |
 | `point-purchase --packageNo <p>` | 下单并渲染微信二维码 | `--waitSeconds 120` 可阻塞等支付完成 |
 | `point-pay-status --rechargeNo <r>` | 查订单支付状态 | 异步 / 多端场景用 |
@@ -36,6 +38,19 @@
 "$AWB_CMD" points -f json
 "$AWB_CMD" project-group-current -f json   # 看 projectPointMax vs Balance
 "$AWB_CMD" point-records --operation 消耗 -f json
+
+# 查某个后台项目 / e2b 沙箱用量
+"$AWB_CMD" usage-summary --projectGroupNo <projectGroupNo> \
+  --since "2026-04-27 00:00:00" \
+  --startProjectPointBalance 10000 \
+  --pointPriceYuan 0.01 -f json
+
+# 后台已注入环境变量时可直接查
+AWB_PROJECT_GROUP_NO=<projectGroupNo> \
+AWB_USAGE_STARTED_AT=1777219200000 \
+AWB_START_PROJECT_POINT_BALANCE=10000 \
+AWB_POINT_PRICE_YUAN=0.01 \
+"$AWB_CMD" usage-summary -f json
 
 # 提高项目组上限（不改团队池）
 "$AWB_CMD" project-group-update --point 2000
@@ -62,6 +77,7 @@
 ## 5. 经验引导
 
 - **"团队够但项目组不够" 是最常见翻车**：先 `points -f json` 对比两个数字；再看 `projectPointMax`——上限低于余额需求也会拒绝创作。用 `project-group-update --point <更大>` 调整。
+- **项目用量统计优先看 `usage-summary`**：任务数按项目组实时拉 `IMAGE_CREATE` / `IMAGE_EDIT` / `VIDEO_GROUP`；积分优先用启动余额减当前余额，没传启动余额时才回退为成功任务 `pointNo` 合计；人民币金额按 `pointPriceYuan` 折算；余额差无法归到任务时会进“未归因积分”。
 - **`point-purchase` 渲染的是微信二维码**：终端要能渲染（`--qrSize 28~32` 调大）。如果 SSH 里显示糊，直接把返回 JSON 里的二维码链接在浏览器打开扫。
 - **`--waitSeconds 120` 只阻塞本进程**：支付可以在手机上完成；脚本阻塞期间不要打断，或用 `point-pay-status` 异步模式。
 - **`redeem` 只进团队池**：个人 / 项目组维度不会变化；兑换后通常还要 `project-group-update --point` 再分配。

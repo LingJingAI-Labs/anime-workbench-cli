@@ -44,6 +44,22 @@ CLI 当前推荐通过微信扫码登录。
 
 ## 安装
 
+### 独立 CLI（推荐）
+
+面向 Agent、e2b、CI 和普通终端用户，优先安装独立入口：
+
+```bash
+npm install -g @lingjingai/awb-cli
+awb --help
+```
+
+如果你是从当前仓库源码开发：
+
+```bash
+npm install -g ./packages/awb-core ./packages/awb-cli
+awb --help
+```
+
 ### opencli 插件
 
 前置依赖：
@@ -64,25 +80,15 @@ npm install -g github:LingJingAI-Labs/anime-workbench-cli
 npm install -g git+https://github.com/LingJingAI-Labs/anime-workbench-cli.git
 ```
 
-安装完成后，`postinstall` 会自动把插件放到 `~/.opencli/plugins/awb`。
+安装完成后，`postinstall` 会自动把插件放到 `~/.opencli/plugins/awb`，并把 Agent skill 同步到 `~/.cc-switch/skills/awb`。
 
-同时会自动补齐 `opencli awb` 的 AWB 专属展示层，包括顶部品牌栏、中文时间格式和 AWB 表格头部居中，不需要用户再手工 patch 宿主。
+`opencli awb` 是兼容入口；完整品牌栏和分组帮助以独立 `awb` 入口为准。
 
 验证安装：
 
 ```bash
 opencli awb --help
 ```
-
-### 独立 CLI
-
-当前仓库已经完成独立 CLI 骨架，入口文件在：
-
-```bash
-node packages/awb-cli/bin/awb.js --help
-```
-
-独立 CLI 已发布为 `@lingjingai/awb-cli`。
 
 如果独立 CLI 本地还没有自己的登录态，它会优先沿用现有 AWB 认证和项目组状态，避免重复登录。兼容读取的旧路径包括：
 
@@ -95,14 +101,14 @@ node packages/awb-cli/bin/awb.js --help
 ## 本地开发
 
 ```bash
-cd /Users/zheyong/Developer/anime-workbench-cli
+cd /path/to/anime-workbench-cli
 npm install -g .
 ```
 
 或直接刷新本地插件安装：
 
 ```bash
-node /Users/zheyong/Developer/anime-workbench-cli/install.mjs
+node /path/to/anime-workbench-cli/install.mjs
 ```
 
 检查代码：
@@ -138,6 +144,8 @@ bash skills/awb/scripts/check-update.sh
 bash skills/awb/scripts/update.sh
 ```
 
+如果你的 Agent 使用自定义 skill 目录，可设置 `AWB_SKILL_INSTALL_DIR=/path/to/awb` 后再执行安装或更新。
+
 Skill workflow 只保留单元化基础用法，例如：
 
 - 简单文生图
@@ -150,6 +158,33 @@ Skill workflow 只保留单元化基础用法，例如：
 - 批量生视频
 
 ## 登录
+
+自动化 / e2b / CI 场景可直接使用 AWB access key，不需要扫码或刷新 token：
+
+```bash
+export AWB_ACCESS_KEY=<access_key>
+# 兼容旧环境变量，也可使用 AWB_CODE=<access_key>
+
+awb auth-status -f json
+awb me -f json
+```
+
+也可以把 access key 保存到本地 AWB auth 文件（权限 `0600`）：
+
+```bash
+opencli awb login-key --accessKey <access_key>
+# 已经设置环境变量时：
+opencli awb login-key --fromEnv true
+# 离线保存/暂不校验时：
+opencli awb login-key --accessKey <access_key> --skipVerify true
+```
+
+CLI 启动时会从当前目录向上查找最近的 `.env`，且不会覆盖已存在的 shell 环境变量：
+
+```dotenv
+AWB_ACCESS_KEY=<access_key>
+# AWB_CODE=<access_key>  # 旧别名；不是 user_id
+```
 
 完成官网注册并绑定微信后，在终端使用微信扫码登录：
 
@@ -194,6 +229,24 @@ opencli awb project-group-current -f json
 opencli awb project-group-users -f json
 opencli awb project-group-create --name "CLI Project" -f json
 opencli awb project-group-select --projectGroupNo <projectGroupNo> -f json
+```
+
+项目 / e2b 沙箱用量统计：
+
+```bash
+opencli awb usage-summary \
+  --projectGroupNo <projectGroupNo> \
+  --since "2026-04-27 00:00:00" \
+  --startProjectPointBalance 10000 \
+  --pointPriceYuan 0.01 \
+  -f json
+
+# 也可由后台注入环境变量后直接查
+AWB_PROJECT_GROUP_NO=<projectGroupNo> \
+AWB_USAGE_STARTED_AT=1777219200000 \
+AWB_START_PROJECT_POINT_BALANCE=10000 \
+AWB_POINT_PRICE_YUAN=0.01 \
+opencli awb usage-summary -f json
 ```
 
 ## 模型发现

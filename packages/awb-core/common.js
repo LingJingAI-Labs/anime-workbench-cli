@@ -1,11 +1,64 @@
 import crypto from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 export const API_ORIGIN = 'https://animeworkbench.lingjingai.cn';
 export const WEB_ORIGIN = API_ORIGIN;
+const ACCESS_KEY_ENV_NAMES = ['AWB_ACCESS_KEY', 'AWB_CODE'];
+const ACCESS_KEY_AUTH_KEYS = ['accessKey', 'access_key', 'awbCode', 'awb_code', 'AWB_CODE', 'AWB_ACCESS_KEY'];
+
+function parseDotenvValue(value) {
+  let text = String(value ?? '').trim();
+  if (text.length >= 2 && text[0] === text.at(-1) && (text[0] === '"' || text[0] === "'")) {
+    const quote = text[0];
+    text = text.slice(1, -1);
+    if (quote === '"') {
+      text = text
+        .replaceAll('\\n', '\n')
+        .replaceAll('\\r', '\r')
+        .replaceAll('\\t', '\t')
+        .replaceAll('\\"', '"')
+        .replaceAll('\\\\', '\\');
+    }
+  }
+  return text;
+}
+
+function loadNearestDotenv() {
+  if (process.env.AWB_DISABLE_DOTENV === '1' || process.env.AWB_DISABLE_DOTENV === 'true') return;
+  let envPath = process.env.AWB_ENV_PATH ? path.resolve(process.env.AWB_ENV_PATH) : null;
+  if (!envPath) {
+    let current = process.cwd();
+    while (current) {
+      const candidate = path.join(current, '.env');
+      if (existsSync(candidate)) {
+        envPath = candidate;
+        break;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  if (!envPath || !existsSync(envPath)) return;
+  try {
+    for (const rawLine of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#') || !line.includes('=')) continue;
+      const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (!match) continue;
+      const [, key, rawValue] = match;
+      if (process.env[key] === undefined) {
+        process.env[key] = parseDotenvValue(rawValue);
+      }
+    }
+  } catch {}
+}
+
+loadNearestDotenv();
+
 const OPENCLI_HOME_DIR = path.join(os.homedir(), '.opencli');
 const STANDALONE_HOME_DIR = path.join(os.homedir(), '.lingjingai', 'awb');
 const LEGACY_OPENCLI_AUTH_PATH = path.join(OPENCLI_HOME_DIR, 'awb-auth.json');
@@ -97,6 +150,69 @@ async function writeJson(filePath, value) {
 async function writeJsonSecure(filePath, value) {
   await writeJson(filePath, value);
   await fs.chmod(filePath, 0o600).catch(() => {});
+}
+
+function trimSecret(value) {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
+function extractAccessKey(auth) {
+  if (!auth || typeof auth !== 'object') return null;
+  for (const key of ACCESS_KEY_AUTH_KEYS) {
+    const value = trimSecret(auth[key]);
+    if (value) return value;
+  }
+  return null;
+}
+
+export function resolveRuntimeAccessKey(auth) {
+  for (const envName of ACCESS_KEY_ENV_NAMES) {
+    const accessKey = trimSecret(process.env[envName]);
+    if (accessKey) {
+      return { accessKey, source: 'env', sourceName: envName };
+    }
+  }
+  const savedAccessKey = extractAccessKey(auth);
+  if (savedAccessKey) {
+    return { accessKey: savedAccessKey, source: 'saved', sourceName: 'auth' };
+  }
+  return null;
+}
+
+export function maskAccessKey(accessKey) {
+  const text = trimSecret(accessKey);
+  if (!text) return null;
+  if (text.length <= 8) return `${'*'.repeat(Math.max(0, text.length - 2))}${text.slice(-2)}`;
+  return `${text.slice(0, 4)}...${text.slice(-4)}`;
+}
+
+function attachAccessKeyAuth(auth) {
+  const accessKeyInfo = resolveRuntimeAccessKey(auth);
+  if (!accessKeyInfo) {
+    return auth ? { ...auth, authType: auth.token ? 'token' : null } : null;
+  }
+  return {
+    ...(auth ?? {}),
+    accessKey: accessKeyInfo.accessKey,
+    awbCode: accessKeyInfo.accessKey,
+    authType: 'access_key',
+    accessKeySource: accessKeyInfo.source,
+    accessKeySourceName: accessKeyInfo.sourceName,
+  };
+}
+
+function sanitizeAuthForStorage(auth) {
+  if (!auth || typeof auth !== 'object') return {};
+  const {
+    authType,
+    accessKeySource,
+    accessKeySourceName,
+    accessKeyPreview,
+    hasAccessKey,
+    ...stored
+  } = auth;
+  return stored;
 }
 
 function sha1(input, encoding = 'hex') {
@@ -249,7 +365,7 @@ export async function readImageMetadata(filePath) {
   };
 }
 
-export async function loadAuth() {
+async function readStoredAuth() {
   const fallbackAuthPath =
     !IS_OPENCLI_RUNTIME && AUTH_PATH !== LEGACY_OPENCLI_AUTH_PATH
       ? LEGACY_OPENCLI_AUTH_PATH
@@ -270,16 +386,20 @@ export async function loadAuth() {
   return mergeAuthRecords(resolvedPrimary, resolvedCompat);
 }
 
+export async function loadAuth() {
+  return attachAccessKeyAuth(await readStoredAuth());
+}
+
 export async function saveAuth(auth) {
   const current = mergeAuthRecords(
     await readJson(AUTH_PATH, null),
     AUTH_COMPAT_PATH ? await readJson(AUTH_COMPAT_PATH, null) : null,
   );
-  const next = {
+  const next = sanitizeAuthForStorage({
     ...current,
     ...auth,
     updatedAt: new Date().toISOString(),
-  };
+  });
   const writes = [writeJsonSecure(AUTH_PATH, next)];
   if (AUTH_COMPAT_PATH) {
     writes.push(writeJsonSecure(AUTH_COMPAT_PATH, toCompatAuthShape(next)));
@@ -345,14 +465,21 @@ export function unwrapApiResponse(payload, fallbackMessage = 'Request failed') {
   return payload;
 }
 
-function buildHeaders(token) {
+function buildHeaders(auth) {
   const headers = {
     'content-type': 'application/json',
     productcode: PRODUCT_CODE,
     source: SOURCE,
     timestamp: String(Date.now()),
   };
-  if (token) headers.authorization = `Bearer ${token}`;
+  const accessKey = extractAccessKey(auth);
+  if (accessKey) {
+    headers['X-Access-Key'] = accessKey;
+  } else if (typeof auth === 'string' && auth) {
+    headers.authorization = `Bearer ${auth}`;
+  } else if (auth?.token) {
+    headers.authorization = `Bearer ${auth.token}`;
+  }
   return headers;
 }
 
@@ -462,11 +589,17 @@ function mergeAuthRecords(primary, compat) {
     jwtPayload.userName ??
     jwtPayload.username ??
     null;
+  const accessKey = extractAccessKey(preferredRecord) ?? extractAccessKey(secondaryRecord) ?? extractAccessKey(merged);
+  if (accessKey) {
+    merged.accessKey = accessKey;
+    merged.awbCode = accessKey;
+  }
   return merged;
 }
 
 function toCompatAuthShape(auth) {
   if (!auth || typeof auth !== 'object') return {};
+  const accessKey = extractAccessKey(auth);
   return {
     refreshToken: auth.refreshToken ?? null,
     groupId: auth.groupId ?? auth.currentGroupId ?? null,
@@ -474,12 +607,13 @@ function toCompatAuthShape(auth) {
     token: auth.token ?? null,
     expiresAt: normalizeExpiresAt(auth.expiresAt) ?? auth.expiresAt ?? null,
     userName: auth.userName ?? null,
+    ...(accessKey ? { accessKey, awbCode: accessKey } : {}),
     updatedAt: auth.updatedAt ?? new Date().toISOString(),
   };
 }
 
 export async function saveLoginPayload(payload, extras = {}) {
-  const existing = (await loadAuth()) ?? {};
+  const existing = (await readStoredAuth()) ?? {};
   const nextToken = payload?.token ?? existing.token;
   const jwtPayload = decodeJwtPayload(nextToken);
   const inferredGroupMember =
@@ -545,7 +679,7 @@ export function isAuthExpiredMessage(message) {
 }
 
 export async function markAuthInvalid(reason = '登录状态已过期') {
-  const existing = (await loadAuth()) ?? {};
+  const existing = (await readStoredAuth()) ?? {};
   return saveAuth({
     ...existing,
     token: null,
@@ -557,25 +691,25 @@ export async function markAuthInvalid(reason = '登录状态已过期') {
 }
 
 function reloginHint(reason = '登录状态已过期') {
-  return `${reason}，请重新执行 \`${commandPrefix()} login-qr\``;
+  return `${reason}，请重新执行 \`${commandPrefix()} login-qr\`，或配置 AWB_ACCESS_KEY（AWB_CODE 是旧别名）。`;
 }
 
 export async function refreshAuth(forceRefreshToken) {
-  const auth = (await loadAuth()) ?? {};
+  const auth = (await readStoredAuth()) ?? {};
   const refreshToken = forceRefreshToken ?? auth.refreshToken;
   if (!refreshToken) {
     if (auth?.lastAuthError) {
       throw new Error(reloginHint(auth.lastAuthError));
     }
     throw new Error(
-      `未找到可续期的登录信息，请先执行 \`${commandPrefix()} login-qr\` 或 \`${commandPrefix()} phone-login\`。`,
+      `未找到可续期的登录信息，请先执行 \`${commandPrefix()} login-qr\` / \`${commandPrefix()} phone-login\`，或配置 AWB_ACCESS_KEY（AWB_CODE 是旧别名）。`,
     );
   }
 
   try {
     const response = await fetch(`${API_ORIGIN}/api/anime/user/account/refreshToken`, {
       method: 'POST',
-      headers: buildHeaders(auth.token),
+      headers: buildHeaders({ token: auth.token }),
       body: JSON.stringify({ refreshToken }),
     });
     const payload = unwrapApiResponse(await response.json(), '刷新登录态失败');
@@ -592,6 +726,9 @@ export async function refreshAuth(forceRefreshToken) {
 
 export async function ensureAuth() {
   const auth = await loadAuth();
+  if (auth?.authType === 'access_key' && auth?.accessKey) {
+    return auth;
+  }
   if (!auth?.token) {
     if (auth?.refreshToken) {
       return refreshAuth(auth.refreshToken);
@@ -600,7 +737,7 @@ export async function ensureAuth() {
       throw new Error(reloginHint(auth.lastAuthError));
     }
     throw new Error(
-      `当前未登录，请先执行 \`${commandPrefix()} login-qr\` 或 \`${commandPrefix()} phone-login\`。`,
+      `当前未登录，请先执行 \`${commandPrefix()} login-qr\` / \`${commandPrefix()} phone-login\`，或配置 AWB_ACCESS_KEY（AWB_CODE 是旧别名）。`,
     );
   }
   if (
@@ -622,9 +759,9 @@ export async function apiFetch(pathname, options = {}) {
     retryOnUnauthorized = true,
   } = options;
 
-  let token;
+  let authContext;
   if (auth) {
-    token = (await ensureAuth()).token;
+    authContext = await ensureAuth();
   }
 
   const url = new URL(pathname, API_ORIGIN);
@@ -637,7 +774,7 @@ export async function apiFetch(pathname, options = {}) {
 
   const response = await fetch(url, {
     method,
-    headers: buildHeaders(token),
+    headers: buildHeaders(authContext),
     body: method === 'GET' ? undefined : body === undefined ? undefined : JSON.stringify(body),
   });
 
@@ -650,6 +787,9 @@ export async function apiFetch(pathname, options = {}) {
 
   const unauthorized = response.status === 401 || payload?.code === 401;
   if (auth && retryOnUnauthorized && unauthorized) {
+    if (authContext?.authType === 'access_key') {
+      throw new Error(payload?.msg || 'AWB access key 无效或无权限，请检查 AWB_ACCESS_KEY（或旧别名 AWB_CODE）。');
+    }
     await refreshAuth();
     return apiFetch(pathname, { ...options, retryOnUnauthorized: false });
   }
@@ -712,8 +852,24 @@ export function extractPointBalance(payload) {
   return null;
 }
 
+export function resolveEnvProjectGroupNo() {
+  return String(
+    process.env.AWB_PROJECT_GROUP_NO ??
+    process.env.PROJECT_GROUP_NO ??
+    process.env.SANDBOX_PROJECT_GROUP_NO ??
+    '',
+  ).trim() || null;
+}
+
 export async function resolveProjectGroupNo(explicit) {
-  if (explicit) return explicit;
+  const explicitProjectGroupNo = String(explicit ?? '').trim();
+  if (explicitProjectGroupNo) return explicitProjectGroupNo;
+
+  const envProjectGroupNo = resolveEnvProjectGroupNo();
+  if (envProjectGroupNo) {
+    await saveState({ currentProjectGroupNo: envProjectGroupNo });
+    return envProjectGroupNo;
+  }
 
   const state = await loadState();
   const last = await apiFetch('/api/anime/workbench/projectGroup/getLastProjectGroup', {
@@ -741,27 +897,36 @@ export function normalizeCode(value) {
 }
 
 export function safeAuthSummary(auth) {
+  const accessKeyInfo = resolveRuntimeAccessKey(auth);
   const expiresAt = auth?.expiresAt ?? null;
   const hasToken = Boolean(auth?.token);
   const hasRefreshToken = Boolean(auth?.refreshToken);
+  const hasAccessKey = Boolean(accessKeyInfo?.accessKey);
   const lastAuthError = auth?.lastAuthError ?? null;
+  let loginState = '未登录';
+  if (hasAccessKey) {
+    loginState = 'AccessKey 已配置';
+  } else if (lastAuthError) {
+    loginState = '登录失效';
+  } else if (hasToken && expiresAt != null && Number(expiresAt) <= Date.now()) {
+    loginState = hasRefreshToken ? '缓存过期' : '已过期';
+  } else if (hasToken) {
+    loginState = '已登录';
+  }
   return {
+    authType: hasAccessKey ? 'access_key' : hasToken ? 'token' : null,
+    hasAccessKey,
+    accessKeySource: accessKeyInfo?.source ?? null,
+    accessKeySourceName: accessKeyInfo?.sourceName ?? null,
+    accessKeyPreview: maskAccessKey(accessKeyInfo?.accessKey),
     hasToken,
     hasRefreshToken,
     hasTempToken: Boolean(auth?.tempToken),
     expiresAt,
-    loginState: lastAuthError
-      ? '登录失效'
-      : !hasToken
-        ? '未登录'
-        : expiresAt != null && Number(expiresAt) <= Date.now()
-          ? hasRefreshToken
-            ? '缓存过期'
-            : '已过期'
-          : '已登录',
-    lastAuthError,
-    authInvalidAt: auth?.authInvalidAt ?? null,
-    updatedAt: auth?.updatedAt ?? null,
+    loginState,
+    lastAuthError: hasAccessKey ? null : lastAuthError,
+    authInvalidAt: hasAccessKey ? null : auth?.authInvalidAt ?? null,
+    updatedAt: hasAccessKey && accessKeyInfo?.source === 'env' ? null : auth?.updatedAt ?? null,
   };
 }
 

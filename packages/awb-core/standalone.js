@@ -34,10 +34,10 @@ function rewriteCommandSpec(spec) {
 
 function getAwbCommandGroup(commandName) {
   const groups = {
-    '登录与账号': new Set(['auth-clear', 'auth-status', 'login-qr', 'login-qr-status', 'phone-login', 'me']),
+    '登录与账号': new Set(['auth-clear', 'auth-status', 'login-key', 'login-qr', 'login-qr-status', 'phone-login', 'me']),
     '平台辅助': new Set(['send-code', 'bind-phone']),
     '团队与项目': new Set(['teams', 'team-select', 'project-groups', 'project-group-users', 'project-group-create', 'project-group-select', 'project-group-current', 'project-group-update']),
-    '积分、支付与发票': new Set(['points', 'point-packages', 'point-records', 'redeem', 'point-purchase', 'point-pay-status', 'invoice-apply']),
+    '积分、支付与发票': new Set(['points', 'usage-summary', 'point-packages', 'point-records', 'redeem', 'point-purchase', 'point-pay-status', 'invoice-apply']),
     '模型与创作': new Set(['model-options', 'image-models', 'video-models', 'image-fee', 'image-create', 'image-create-batch', 'video-fee', 'video-create', 'video-create-batch']),
     '素材与任务': new Set(['upload-files', 'subject-upload', 'subject-publish', 'subject-publish-batch', 'subject-status', 'subject-group-update', 'tasks', 'task-wait']),
   };
@@ -124,13 +124,15 @@ async function buildStandaloneBanner() {
     ?? readJsonSafe(path.join(home, '.opencli', 'awb-state.json'), {})
     ?? {};
   const authSummary = safeAuthSummary(auth);
-  const loginStatus = authSummary.lastAuthError
-    ? chalk.yellow('登录失效，请重登')
-    : authSummary.loginState === '已登录'
-      ? chalk.green('已登录')
-      : authSummary.loginState === '缓存过期'
-        ? chalk.yellow('缓存过期，可自动续期')
-        : chalk.yellow(authSummary.loginState ?? '未登录');
+  const loginStatus = authSummary.authType === 'access_key'
+    ? chalk.green('AccessKey 已配置')
+    : authSummary.lastAuthError
+      ? chalk.yellow('登录失效，请重登')
+      : authSummary.loginState === '已登录'
+        ? chalk.green('已登录')
+        : authSummary.loginState === '缓存过期'
+          ? chalk.yellow('缓存过期，可自动续期')
+          : chalk.yellow(authSummary.loginState ?? '未登录');
   const orange = chalk.hex('#ff6a00');
   const orangeSoft = chalk.hex('#ff9a4d');
   const labelWidth = 8;
@@ -150,6 +152,7 @@ async function buildStandaloneBanner() {
     formatBannerRow('品牌名称', '灵境AI | https://lingjingai.cn/', labelWidth, orangeSoft),
     formatBannerRow('版本信息', `AWB CLI v${version}`, labelWidth, orangeSoft),
     formatBannerRow('登录状态', loginStatus, labelWidth, orangeSoft),
+    formatBannerRow('认证方式', authSummary.authType ?? '-', labelWidth, orangeSoft),
     formatBannerRow('当前用户', state?.currentUserName ?? '未识别', labelWidth, orangeSoft),
     formatBannerRow('当前团队', state?.currentGroupName ?? '未选择', labelWidth, orangeSoft),
     formatBannerRow('当前项目', state?.currentProjectGroupName ?? state?.currentProjectGroupNo ?? '未选择', labelWidth, orangeSoft),
@@ -207,9 +210,11 @@ export async function runStandaloneCli(argv = process.argv.slice(2)) {
     return;
   }
   const program = new Command();
+  const version = await readStandaloneVersion();
   program
     .name(runtimePrefix())
     .description('LingJing AI Anime Workbench CLI')
+    .version(`AWB CLI v${version}`, '-v, --version', 'display version')
     .showHelpAfterError();
   program.addHelpText('before', banner);
   program.configureHelp({

@@ -38,6 +38,20 @@ function copyPackageContents(sourceDir, targetDir) {
   }
 }
 
+function copySkillBundle(sourceDir, targetDir) {
+  mkdirSync(targetDir, { recursive: true });
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    if (entry.name === '.DS_Store') continue;
+    const sourcePath = join(sourceDir, entry.name);
+    const targetPath = join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      copySkillBundle(sourcePath, targetPath);
+    } else {
+      cpSync(sourcePath, targetPath);
+    }
+  }
+}
+
 function patchFile(filePath, transform) {
   if (!existsSync(filePath)) return { changed: false, reason: 'missing' };
   const before = fs.readFileSync(filePath, 'utf8');
@@ -58,6 +72,17 @@ function patchOpencliCommanderAdapter(opencliDir) {
     next = next.replace(
       /formatAwbStatusRow\('品牌名称',\s*'[^']*',\s*labelWidth,\s*orangeSoft\)/,
       "formatAwbStatusRow('品牌名称', '灵境AI | https://lingjingai.cn/', labelWidth, orangeSoft)",
+    );
+    next = next.replace(
+      /const groups = \{[\s\S]*?\n\s*\};(?=\n\s*for \(const \[group, commands\] of Object\.entries\(groups\)\))/,
+      `const groups = {
+        '登录与账号': new Set(['auth-clear', 'auth-status', 'login-key', 'login-qr', 'login-qr-status', 'phone-login', 'me']),
+        '平台辅助': new Set(['send-code', 'bind-phone']),
+        '团队与项目': new Set(['teams', 'team-select', 'project-groups', 'project-group-users', 'project-group-create', 'project-group-select', 'project-group-current', 'project-group-update']),
+        '积分、支付与发票': new Set(['points', 'usage-summary', 'point-packages', 'point-records', 'redeem', 'point-purchase', 'point-pay-status', 'invoice-apply']),
+        '模型与创作': new Set(['model-options', 'image-models', 'video-models', 'image-fee', 'image-create', 'image-create-batch', 'video-fee', 'video-create', 'video-create-batch']),
+        '素材与任务': new Set(['upload-files', 'subject-upload', 'subject-publish', 'subject-publish-batch', 'subject-status', 'subject-group-update', 'tasks', 'task-wait']),
+    };`,
     );
     return next;
   });
@@ -169,14 +194,23 @@ function renderTable(data, opts) {
 const packageDir = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const targetDir = join(homedir(), '.opencli', 'plugins', 'awb');
+const skillSourceDir = join(packageDir, 'skills', 'awb');
+const skillTargetDir = process.env.AWB_SKILL_INSTALL_DIR || join(homedir(), '.cc-switch', 'skills', 'awb');
 const targetNodeModulesDir = join(targetDir, 'node_modules');
 const opencliLinkDir = join(targetNodeModulesDir, '@jackwener');
 const opencliLinkPath = join(opencliLinkDir, 'opencli');
+const opencliHomeLinkDir = join(homedir(), '.opencli', 'node_modules', '@jackwener');
+const opencliHomeLinkPath = join(opencliHomeLinkDir, 'opencli');
 const opencliDir = resolveGlobalOpencliDir();
 
 mkdirSync(dirname(targetDir), { recursive: true });
 rmSync(targetDir, { recursive: true, force: true });
 copyPackageContents(packageDir, targetDir);
+if (process.env.AWB_SKIP_SKILL_INSTALL !== '1' && existsSync(skillSourceDir)) {
+  rmSync(skillTargetDir, { recursive: true, force: true });
+  copySkillBundle(skillSourceDir, skillTargetDir);
+  log(`\x1b[32m✓\x1b[0m Installed AWB skill → ${skillTargetDir}`);
+}
 
 if (!opencliDir) {
   log('\x1b[33m!\x1b[0m Installed awb plugin files, but could not find global `@jackwener/opencli`.');
@@ -188,6 +222,9 @@ if (!opencliDir) {
 mkdirSync(opencliLinkDir, { recursive: true });
 rmSync(opencliLinkPath, { recursive: true, force: true });
 symlinkSync(opencliDir, opencliLinkPath, 'dir');
+mkdirSync(opencliHomeLinkDir, { recursive: true });
+rmSync(opencliHomeLinkPath, { recursive: true, force: true });
+symlinkSync(opencliDir, opencliHomeLinkPath, 'dir');
 
 for (const dependencyName of ['qrcode']) {
   const packageJsonPath = require.resolve(`${dependencyName}/package.json`);
@@ -200,6 +237,7 @@ for (const dependencyName of ['qrcode']) {
 
 log(`\x1b[32m✓\x1b[0m Installed awb plugin → ${targetDir}`);
 log(`\x1b[32m✓\x1b[0m Linked opencli runtime → ${opencliLinkPath}`);
+log(`\x1b[32m✓\x1b[0m Linked opencli home runtime → ${opencliHomeLinkPath}`);
 const commanderPatch = patchOpencliCommanderAdapter(opencliDir);
 const outputPatch = patchOpencliOutput(opencliDir);
 if (commanderPatch.changed || outputPatch.changed) {
