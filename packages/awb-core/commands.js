@@ -51,6 +51,12 @@ const AWB_INVOICE_UPLOAD_MOUNT_POINT = 'bitable_tmp_point';
 const TASK_EXEC_STAT_ORIGIN = 'https://monitor-statistics-llm.lingjingai.cn';
 const ASSET_EDIT_ORIGIN = 'https://asset-edit.lingjingai.cn';
 const AIHUBMIX_ORIGIN = 'https://aihubmix.com';
+const AIHUBMIX_HAPPYHORSE_COST_DEFAULTS = {
+  p720UsdPerSecond: 0.1395,
+  p1080UsdPerSecond: 0.2479,
+  cnyPerUsd: 7.2,
+  source: 'AiHubMix HappyHorse pricing: 720p 0.1395 USD/s, 1080p 0.2479 USD/s.',
+};
 const AIHUBMIX_VIDEO_MODELS = [
   {
     modelCode: 'happyhorse-1.0-t2v',
@@ -5200,13 +5206,16 @@ async function createImageTask(kwargs) {
 
 async function estimateVideoFee(kwargs) {
   if (isAihubmixVideoModelSelector(kwargs)) {
-    const model = await resolveModelSelection('video', kwargs);
+    const { model, request } = await buildAihubmixVideoRequestForEstimate(kwargs);
+    const costEstimate = buildAihubmixVideoCostEstimate(model, request, kwargs);
     return {
       provider: 'aihubmix',
       modelCode: model.modelCode,
       modelGroupCode: model.modelGroupCode,
       pointCost: null,
       billingNote: 'AiHubMix 外部计费，不消耗 AWB/灵境积分；实际成本由 AIHUBMIX_API_KEY 所属项目承担。',
+      ...costEstimate,
+      request,
     };
   }
   printRuntimeNote(['[AWB] 正在计算生视频积分...']);
@@ -5393,6 +5402,78 @@ async function firstAihubmixImageReference(kwargs) {
   return null;
 }
 
+function envNumber(name, fallback) {
+  const parsed = toNumberOrNull(process.env[name]);
+  return parsed == null || parsed < 0 ? fallback : parsed;
+}
+
+function roundMoney(value) {
+  return Math.round(value * 10000) / 10000;
+}
+
+function parseAihubmixSeconds(request = {}, kwargs = {}) {
+  return Math.max(1, toNumberOrNull(request.seconds ?? kwargs.generatedTime ?? kwargs.seconds) ?? 5);
+}
+
+function isAihubmix1080pEstimate(request = {}, kwargs = {}) {
+  const quality = String(kwargs.quality ?? request.quality ?? '').toLowerCase();
+  if (/(^|[^0-9])(1080|2k|4k|hd|uhd)([^0-9]|$)/i.test(quality)) return true;
+  const size = String(request.size ?? kwargs.size ?? '').toLowerCase();
+  const match = size.match(/(\d+)\s*x\s*(\d+)/);
+  if (!match) return false;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return Math.max(width, height) >= 1920 || Math.min(width, height) >= 1080;
+}
+
+function buildAihubmixVideoCostEstimate(model = {}, request = {}, kwargs = {}) {
+  const seconds = parseAihubmixSeconds(request, kwargs);
+  const is1080p = isAihubmix1080pEstimate(request, kwargs);
+  const modelEnvPrefix = `AIHUBMIX_HAPPYHORSE_${String(model.modelCode ?? 'DEFAULT').toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
+  const usdPerSecond = is1080p
+    ? envNumber(`${modelEnvPrefix}_1080P_USD_PER_SECOND`, envNumber('AIHUBMIX_HAPPYHORSE_1080P_USD_PER_SECOND', AIHUBMIX_HAPPYHORSE_COST_DEFAULTS.p1080UsdPerSecond))
+    : envNumber(`${modelEnvPrefix}_720P_USD_PER_SECOND`, envNumber('AIHUBMIX_HAPPYHORSE_720P_USD_PER_SECOND', AIHUBMIX_HAPPYHORSE_COST_DEFAULTS.p720UsdPerSecond));
+  const cnyPerUsd = envNumber('AIHUBMIX_CNY_PER_USD', AIHUBMIX_HAPPYHORSE_COST_DEFAULTS.cnyPerUsd);
+  const estimatedCostUsd = roundMoney(seconds * usdPerSecond);
+  const estimatedCostCny = roundMoney(estimatedCostUsd * cnyPerUsd);
+  return {
+    estimatedCostUsd,
+    estimatedCostCny,
+    estimatedBillingCurrency: 'USD/CNY',
+    estimatedSeconds: seconds,
+    estimatedUsdPerSecond: usdPerSecond,
+    estimatedResolutionTier: is1080p ? '1080p' : '720p',
+    costEstimateSource: AIHUBMIX_HAPPYHORSE_COST_DEFAULTS.source,
+    costEstimateFormula: `${seconds}s * ${usdPerSecond} USD/s * ${cnyPerUsd} CNY/USD`,
+    costEstimateNote: '估算只用于提交前确认；实际扣费以 AiHubMix 账户账单为准。',
+  };
+}
+
+async function buildAihubmixVideoRequestForEstimate(kwargs = {}) {
+  return buildAihubmixVideoRequest({
+    ...kwargs,
+    frameFile: null,
+    refImageFiles: null,
+    refVideoFiles: null,
+    refAudioFiles: null,
+  }).catch(async () => {
+    const model = await resolveModelSelection('video', kwargs);
+    const size =
+      trimToNull(kwargs.size) ??
+      (trimToNull(kwargs.quality) && String(kwargs.quality).includes('x') ? trimToNull(kwargs.quality) : null) ??
+      (trimToNull(kwargs.ratio) === '9:16' ? '720x1280' : trimToNull(kwargs.ratio) === '1:1' ? '960x960' : '1280x720');
+    return {
+      model,
+      request: {
+        model: model.modelCode,
+        prompt: trimToNull(kwargs.prompt ?? kwargs.frameText) ?? '<prompt>',
+        seconds: trimToNull(kwargs.generatedTime) ?? trimToNull(kwargs.seconds) ?? '5',
+        size,
+      },
+    };
+  });
+}
+
 async function aihubmixContentItem(kind, spec) {
   const value = await resolveAihubmixReferenceValue(spec);
   if (!value) return null;
@@ -5527,6 +5608,7 @@ async function createAihubmixVideoTask(kwargs = {}) {
     '[AWB] 正在提交 AiHubMix 视频任务...',
   ]);
   const { model, request } = await buildAihubmixVideoRequest(kwargs);
+  const costEstimate = buildAihubmixVideoCostEstimate(model, request, kwargs);
   const payload = await aihubmixFetch('/v1/videos', {
     method: 'POST',
     kwargs,
@@ -5538,6 +5620,7 @@ async function createAihubmixVideoTask(kwargs = {}) {
     modelGroupCode: model.modelGroupCode,
     pointCost: null,
     billingNote: 'AiHubMix 外部计费，不消耗 AWB/灵境积分',
+    ...costEstimate,
     request: JSON.stringify(request),
   });
   if (toInt(kwargs.waitSeconds, 0) > 0 && normalized.taskId) {
@@ -5547,24 +5630,8 @@ async function createAihubmixVideoTask(kwargs = {}) {
 }
 
 async function previewAihubmixVideoCreate(kwargs = {}) {
-  const { model, request } = await buildAihubmixVideoRequest({
-    ...kwargs,
-    frameFile: null,
-    refImageFiles: null,
-    refVideoFiles: null,
-    refAudioFiles: null,
-  }).catch(async () => {
-    const model = await resolveModelSelection('video', kwargs);
-    return {
-      model,
-      request: {
-        model: model.modelCode,
-        prompt: trimToNull(kwargs.prompt ?? kwargs.frameText) ?? '<prompt>',
-        seconds: trimToNull(kwargs.generatedTime) ?? '5',
-        size: trimToNull(kwargs.size) ?? '1280x720',
-      },
-    };
-  });
+  const { model, request } = await buildAihubmixVideoRequestForEstimate(kwargs);
+  const costEstimate = buildAihubmixVideoCostEstimate(model, request, kwargs);
   return {
     dryRun: true,
     action: 'video-create',
@@ -5573,6 +5640,7 @@ async function previewAihubmixVideoCreate(kwargs = {}) {
     modelGroupCode: model.modelGroupCode,
     pointCost: null,
     billingNote: 'AiHubMix 外部计费，不消耗 AWB/灵境积分',
+    ...costEstimate,
     request,
     raw: JSON.stringify({ request }),
   };

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.12 - 2026-04-27
+
+- Add HappyHorse / AiHubMix external cost estimates to `video-fee`, `video-create --dryRun true`, and created task output.
+- Estimate USD and CNY from AiHubMix HappyHorse per-second prices while keeping `pointCost: null` so external billing is not confused with AWB project-group points.
+- Allow price overrides through `AIHUBMIX_HAPPYHORSE_720P_USD_PER_SECOND`, `AIHUBMIX_HAPPYHORSE_1080P_USD_PER_SECOND`, and `AIHUBMIX_CNY_PER_USD`.
+
 ## 0.1.11 - 2026-04-27
 
 - Add AiHubMix HappyHorse external video model support for `happyhorse-1.0-t2v`, `happyhorse-1.0-i2v`, `happyhorse-1.0-r2v`, and `happyhorse-1.0-video-edit`.

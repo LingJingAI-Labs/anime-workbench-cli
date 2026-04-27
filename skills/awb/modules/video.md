@@ -254,6 +254,8 @@ NEXT_REF=$("$AWB_CMD" subject-publish --name 小莉 \
 
 HappyHorse 暂未接入灵境 AWB 积分模型表时，可直接用 AiHubMix key 走外部计费。CLI 默认读取 `AIHUBMIX_API_KEY`（也兼容 `AIHUBMIX_KEY` / `AIHUBMIX_TOKEN`），不消耗 AWB 项目组积分；成本归属由 AiHubMix key 所在项目承担。
 
+`video-fee` 和 `video-create --dryRun true` 会给外部成本估算：默认按 AiHubMix HappyHorse 价格 `720p = 0.1395 USD/s`、`1080p = 0.2479 USD/s`、`1 USD = 7.2 CNY` 估算，并返回 `estimatedCostUsd`、`estimatedCostCny`、`estimatedUsdPerSecond`、`estimatedResolutionTier`。实际扣费以 AiHubMix 账单为准；如 AiHubMix 实际单价变动，可用 `AIHUBMIX_HAPPYHORSE_720P_USD_PER_SECOND`、`AIHUBMIX_HAPPYHORSE_1080P_USD_PER_SECOND`、`AIHUBMIX_CNY_PER_USD` 覆盖。
+
 支持的 `modelGroupCode`：
 
 - `happyhorse-1.0-t2v`：文生视频，只需要 `--prompt`
@@ -277,7 +279,7 @@ HappyHorse 暂未接入灵境 AWB 积分模型表时，可直接用 AiHubMix key
 "$AWB_CMD" aihubmix-video-download --taskId <video_id> --outputFile ./output.mp4
 ```
 
-AiHubMix 任务返回的是 `video_id`，不是 AWB 后端 taskId；推荐直接用 `aihubmix-video-status` 查询，也可用 `task-wait --taskType AIHUBMIX_VIDEO --taskId <video_id>` 接入通用等待链路。`video-create --dryRun true` 只预览 AiHubMix 请求体，不会查 AWB 余额。
+AiHubMix 任务返回的是 `video_id`，不是 AWB 后端 taskId；推荐直接用 `aihubmix-video-status` 查询，也可用 `task-wait --taskType AIHUBMIX_VIDEO --taskId <video_id>` 接入通用等待链路。`video-create --dryRun true` 会预览 AiHubMix 请求体和外部成本估算，不会查 AWB 余额。
 
 ## 5. 经验引导
 
