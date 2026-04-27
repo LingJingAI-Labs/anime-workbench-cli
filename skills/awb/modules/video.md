@@ -39,10 +39,19 @@
 "$AWB_CMD" video-fee --modelGroupCode <g> --frameFile ./frame.webp \
   --quality 720 --generatedTime 5 --ratio 16:9 -f json
 
-# 3) 正式提交
+# 3) 用户确认后，正式提交
 "$AWB_CMD" video-create --modelGroupCode <g> --frameFile ./frame.webp \
   --quality 720 --generatedTime 5 --ratio 16:9 --waitSeconds 180 -f json
 ```
+
+提交前给用户确认的最小摘要：
+
+- 模型 / 通道：`modelGroupCode`，说明 Fast / Pro / Omni / Discount / 1080p 等取舍
+- 模式：纯提示词、首尾帧、参考生视频、故事板四选一；说明没有混用互斥参数
+- 参数：`ratio`、`quality`（如 `720/1080`，以 `model-options` 可选值为准）、`generatedTime`、音效 / 音频 / 主体引用
+- 输入：最终 prompt / storyboard；帧图、参考图、参考视频、音频、主体 asset 的绑定关系
+- 费用：预计积分、项目组余额、提交后预计剩余；Token 计费模型必须先估算
+- 等待：视频默认异步或短窗口等待；超过窗口后保存 `taskId`，后续用 `task-wait` / `tasks` 取结果
 
 ### 自动化默认路线（短剧 / 多参考 / 主体）
 
@@ -54,6 +63,7 @@
 4. **要控镜头切换**：先用 Banana Pro / Nano Banana / GPT Image 2 出 4 / 9 宫格分镜指挥图，再把它作为一张参考图传给视频模型。
 5. **模型取舍**：效果优先用 Seedance 2.0 720p；预算优先用 Seedance 2.0 Fast 或 Grok；可灵 3.0 / Omni 可用但音色引用链路更复杂，需按 `model-options` 确认。
 6. **成本控制**：Seedance 2.0 系列是 Token 计费，默认先 `video-fee`，默认 `720p`；只有用户明确要高质交付再上 `1080p`。
+7. **确认闸口**：短剧 / 说话 / 对口型任务通常成本和等待时间都更高，正式提交前必须让用户确认模型通道、时长、清晰度、主体/音频绑定和预计积分；用户明确说自动跑时才跳过。
 
 ## 4. 典型场景
 
@@ -231,5 +241,7 @@ NEXT_REF=$("$AWB_CMD" subject-publish --name 小莉 \
 - **`--generatedTime` 单位是秒**：常见 5 / 10 / 15；部分模型只接离散值。可灵 3.0（非 Omni）的参考生视频 `multi_param` 路径截至 2026-04-24 实测 10 秒可创建、15 秒会失败；可灵 3.0-Omni 同路径 15 秒已实测可成功。CLI 当前只拦截已验证会失败的非 Omni 15 秒路径。
 - **Token 计费模型（Seedance 2.0 系列）先 `video-fee`**：和按张 / 按次计费的不一样，提示词长度 / 参考数量都会推高成本。
 - **默认清晰度是 720p**：Seedance 2.0 可用 1080p，但成本很高；除非用户明确要高质量，否则自动化默认 720p。
+- **没给清晰度 / 比例 / 时长就不要静默提交**：先问用户，或明确建议默认值（如试片 `720p`、`5s`、竖屏 `9:16` / 横屏 `16:9`）并等待确认；`1080p` / Pro / 高质通道必须确认成本。
 - **故事板、音效开关不是所有模型都有**：查 `video-models` 的 `特色能力` 列；也能在 `paramKeys` 里看 `multi_prompt` / `audio` 是否存在。故事板分镜 `duration` 是秒，总和必须等于 `--generatedTime`。
 - **`--waitSeconds 180` 起步**：视频任务比生图慢得多；想完全异步就 `--waitSeconds 0`，拿 `taskId` 走 `task-wait`。
+- **异步台账**：视频默认建议加 `--taskRecordFile .awb/tasks.jsonl`；后续用同一个文件跑 `task-record-poll` 批量查回结果，或 `task-records --pendingOnly true` 只查看还没记录完成结果的任务。

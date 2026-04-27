@@ -34,10 +34,18 @@
 "$AWB_CMD" image-fee --modelGroupCode <g> --prompt "一只小狗" \
   --quality 1K --ratio 16:9 --generateNum 1 -f json
 
-# 3) 正式提交（同步等结果）
+# 3) 用户确认后，正式提交（同步等结果）
 "$AWB_CMD" image-create --modelGroupCode <g> --prompt "一只小狗" \
   --quality 1K --ratio 16:9 --generateNum 1 --waitSeconds 120 -f json
 ```
+
+提交前给用户确认的最小摘要：
+
+- 模型 / 通道：`modelGroupCode`，并说明是否 Discount / Fast / Pro
+- 参数：`ratio`、`quality`（如 `1K/2K/4K`，以 `model-options` 可选值为准）、`generateNum` / `directGenerateNum`，以及模型不支持而省略的参数
+- 输入：最终 prompt；参考图本地路径或 backendPath；参考类型（`iref` / `cref` / `sref`）
+- 费用：预计积分、项目组余额、提交后预计剩余
+- 等待：单图默认可 `--waitSeconds 120`；长耗时或用户要继续做别的事时改异步，先返回 `taskId`
 
 ## 4. 典型场景
 
@@ -115,7 +123,10 @@ GPT Image 2 这类参数缩减模型不要带 `quality` / `generateNum`：
 
 - **先 `model-options`，后创作**：别把 Nano Banana 的默认 `--quality 1K --ratio 16:9 --generateNum 1` 直接套到 GPT Image 2 / Midjourney / 千问—— `paramKeys` 里没有的参数传了会报错。
 - **`image-fee` 优先于裸 `--dryRun`**：前者已经包含预估积分 + 项目组余额 + 提交后剩余；`--dryRun true` 适合结构很复杂（故事板 / 多参考）时再核对整段 payload。
+- **确认不是费用大小决定的**：即使只花 1 积分，也要先展示最终 prompt / 模型通道 / 参数并等用户确认，除非用户明确授权自动提交。
+- **没给清晰度 / 比例就不要静默提交**：先问用户，或明确建议默认值（如试片 `1K`、竖屏 `9:16` / 横屏 `16:9`）并等待确认；GPT Image 2 这类不支持 `quality` 的模型要说明“不能选 2K/4K 档”。
 - **`--waitSeconds 120` 的边界**：生图一般几十秒；写大了是安全的。超时也不扣积分重试——`task-wait` 后续兜底。
+- **异步台账**：不等结果或批量提交时加 `--taskRecordFile .awb/tasks.jsonl`；后续用 `task-record-poll` 批量恢复，或 `task-wait` 单个等待，并带同一个参数把结果追加回台账。
 - **`generateNum` 是"最终返回几张"**：不是所有模型都支持，以 `paramKeys` 为准；千问用 `--directGenerateNum`。
 - **分镜指挥图通常 `generateNum=1`**：目标是一张 4 / 9 宫格图，不是 4 / 9 张独立返回图；比例跟最终视频一致（竖屏 `9:16`，横屏 `16:9`）。
 - **`--irefFiles "./a.webp,./b.webp"` 是逗号分隔**：不是 JSON 数组。

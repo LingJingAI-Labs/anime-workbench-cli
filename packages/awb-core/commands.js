@@ -52,6 +52,10 @@ const DRY_RUN_ARG = {
   name: 'dryRun',
   help: '仅预览请求，不真正执行写操作。示例: --dryRun true',
 };
+const TASK_RECORD_FILE_ARG = {
+  name: 'taskRecordFile',
+  help: '把已提交任务追加写入 JSONL 台账。示例: .awb/tasks.jsonl；也可用 AWB_TASK_RECORD_FILE',
+};
 const execFile = promisify(execFileCallback);
 
 function runtimeCommandPrefix() {
@@ -1168,12 +1172,13 @@ function resolveUsageStartBalance(kwargs) {
 }
 
 function resolveUsagePointPriceYuan(kwargs) {
-  return toNumberOrNull(
+  const explicit = trimToNull(
     kwargs.pointPriceYuan ??
     kwargs.yuanPerPoint ??
     process.env.AWB_POINT_PRICE_YUAN ??
     process.env.AWB_YUAN_PER_POINT,
   );
+  return toNumberOrNull(explicit) ?? 0.1;
 }
 
 async function resolvePreviewProjectGroupNo(explicit) {
@@ -1339,6 +1344,124 @@ async function readJsonFile(filePath, fallback = null) {
 async function writeJsonFile(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function resolveTaskRecordFile(kwargs = {}) {
+  const filePath = trimToNull(kwargs.taskRecordFile ?? process.env.AWB_TASK_RECORD_FILE);
+  return filePath ? path.resolve(filePath) : null;
+}
+
+function taskPromptSummary(input = {}) {
+  const prompt =
+    input.prompt ??
+    input.frameText ??
+    input.storyboardPrompts ??
+    input.richTaskPrompt ??
+    input.taskPrompt ??
+    null;
+  const text = trimToNull(prompt);
+  return text ? text.slice(0, 160) : null;
+}
+
+async function appendTaskRecord(kwargs, record) {
+  const filePath = resolveTaskRecordFile(kwargs);
+  if (!filePath || !record?.taskId) return null;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, `${JSON.stringify({
+    schemaVersion: 1,
+    site: SITE,
+    recordedAt: new Date().toISOString(),
+    ...record,
+  })}\n`, 'utf8');
+  return filePath;
+}
+
+async function loadTaskRecordRows(kwargs = {}) {
+  const filePath = resolveTaskRecordFile(kwargs);
+  if (!filePath) {
+    throw new Error('请提供 `--taskRecordFile <path>`，或设置 AWB_TASK_RECORD_FILE。');
+  }
+  const text = await fs.readFile(filePath, 'utf8').catch((error) => {
+    if (error?.code === 'ENOENT') return '';
+    throw error;
+  });
+  const records = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const latest = new Map();
+  for (const record of records) {
+    if (!record?.taskId) continue;
+    latest.set(record.taskId, record);
+  }
+  const taskType = trimToNull(kwargs.taskType);
+  const normalizedTaskType = taskType ? normalizeFeedTaskType(taskType) : null;
+  const pendingOnly = toBool(kwargs.pendingOnly);
+  const limit = Math.max(1, toInt(kwargs.limit, 100));
+  return [...latest.values()]
+    .filter((record) => !normalizedTaskType || normalizeFeedTaskType(record.taskType) === normalizedTaskType)
+    .filter((record) => {
+      if (!pendingOnly) return true;
+      const status = String(record.taskStatus ?? '').trim().toUpperCase();
+      return !record.firstResultUrl && !TERMINAL_TASK_STATES.has(status);
+    })
+    .sort((a, b) => String(b.recordedAt ?? '').localeCompare(String(a.recordedAt ?? '')))
+    .slice(0, limit);
+}
+
+async function pollTaskRecordRows(kwargs = {}) {
+  const waitSeconds = Math.max(0, toInt(kwargs.waitSeconds, 0));
+  const pollIntervalMs = Math.max(1000, toInt(kwargs.pollIntervalMs, 5000));
+  const deadline = Date.now() + waitSeconds * 1000;
+  let pending = await loadTaskRecordRows({ ...kwargs, pendingOnly: true });
+  const latestByTaskId = new Map();
+
+  while (pending.length) {
+    if (waitSeconds > 0 && Date.now() >= deadline) break;
+    for (const record of pending) {
+      const taskType = normalizeFeedTaskType(record.taskType || kwargs.taskType || 'IMAGE_CREATE');
+      const checked = await findTaskOnce({
+        taskId: record.taskId,
+        taskType,
+        projectGroupNo: record.projectGroupNo ?? kwargs.projectGroupNo,
+        pageSize: kwargs.pageSize ?? 100,
+      }).catch((error) => ({
+        taskId: record.taskId,
+        taskType,
+        projectGroupNo: record.projectGroupNo ?? kwargs.projectGroupNo ?? null,
+        taskStatus: 'QUERY_ERROR',
+        errorMsg: error instanceof Error ? error.message : String(error),
+      }));
+      const status = String(checked?.taskStatus ?? '').trim().toUpperCase();
+      const completed = Boolean(checked?.firstResultUrl) || TERMINAL_TASK_STATES.has(status);
+      const event = completed ? 'completed' : 'checked';
+      const timedOut = !completed && waitSeconds > 0 && Date.now() >= deadline;
+      const next = {
+        ...record,
+        ...checked,
+        event,
+        command: 'task-record-poll',
+        taskType,
+        taskId: record.taskId,
+        projectGroupNo: checked?.projectGroupNo ?? record.projectGroupNo ?? kwargs.projectGroupNo ?? null,
+        firstResultUrl: checked?.firstResultUrl ?? record.firstResultUrl ?? null,
+        resultCount: checked?.resultCount ?? record.resultCount ?? null,
+        timedOut,
+      };
+      await appendTaskRecord(kwargs, next);
+      latestByTaskId.set(record.taskId, next);
+    }
+
+    pending = [...latestByTaskId.values()].filter((record) => {
+      const status = String(record.taskStatus ?? '').trim().toUpperCase();
+      return !record.firstResultUrl && !TERMINAL_TASK_STATES.has(status);
+    });
+    if (!pending.length || waitSeconds <= 0 || Date.now() >= deadline) break;
+    await sleep(pollIntervalMs);
+  }
+
+  return [...latestByTaskId.values()];
 }
 
 function normalizePointPackageRows(list, source = 'api') {
@@ -6172,10 +6295,10 @@ cli({
   description: commandHelp('按项目组汇总图片/视频任务数与积分消耗', {
     examples: [
       'opencli awb usage-summary --projectGroupNo <projectGroupNo> --since "2026-04-27 00:00:00"',
-      'opencli awb usage-summary --projectGroupNo <projectGroupNo> --sinceMs 1777219200000 --startProjectPointBalance 10000 --pointPriceYuan 0.01 -f json',
+      'opencli awb usage-summary --projectGroupNo <projectGroupNo> --sinceMs 1777219200000 --startProjectPointBalance 10000 --pointPriceYuan 0.1 -f json',
       'AWB_PROJECT_GROUP_NO=<projectGroupNo> AWB_USAGE_STARTED_AT=1777219200000 AWB_START_PROJECT_POINT_BALANCE=10000 opencli awb usage-summary -f json',
     ],
-    hint: '任务数按项目组实时查询；积分优先用启动余额 - 当前余额，未提供启动余额时回退为成功任务 pointNo 合计。',
+    hint: '任务数按项目组实时查询；积分优先用启动余额 - 当前余额，未提供启动余额时回退为成功任务 pointNo 合计。默认按 1 积分 = 0.1 元折算。',
   }),
   browser: false,
   args: [
@@ -6187,7 +6310,7 @@ cli({
     { name: 'lastHours', help: '不传 since 时可查最近 N 小时。示例: --lastHours 24' },
     { name: 'startProjectPointBalance', help: '项目启动时项目组余额；也可用 AWB_START_PROJECT_POINT_BALANCE' },
     { name: 'startBalance', help: 'startProjectPointBalance 的简写别名' },
-    { name: 'pointPriceYuan', help: '每积分人民币单价，用于估算金额。也可用 AWB_POINT_PRICE_YUAN' },
+    { name: 'pointPriceYuan', help: '每积分人民币单价，用于估算金额。默认 0.1；也可用 AWB_POINT_PRICE_YUAN' },
     { name: 'yuanPerPoint', help: 'pointPriceYuan 的简写别名' },
     { name: 'pageSize', type: 'int', default: 100, help: '每次拉取任务数，最大 200。默认: 100' },
     { name: 'maxPages', type: 'int', default: 20, help: '每类任务最多翻页数。默认: 20' },
@@ -7055,9 +7178,103 @@ cli({
     { name: 'pageSize', type: 'int', default: 100 },
     { name: 'waitSeconds', type: 'int', default: 300 },
     { name: 'pollIntervalMs', type: 'int', default: 5000 },
+    TASK_RECORD_FILE_ARG,
   ],
   columns: ['任务ID', '任务状态', '模型', '首个结果', '等待秒数', '是否超时'],
-  func: async (_page, kwargs) => presentTaskWaitResult(await waitForTask(kwargs)),
+  func: async (_page, kwargs) => {
+    const result = await waitForTask(kwargs);
+    await appendTaskRecord(kwargs, {
+      event: result.timedOut ? 'checked' : 'completed',
+      command: 'task-wait',
+      taskType: normalizeFeedTaskType(kwargs.taskType || 'IMAGE_CREATE'),
+      taskId: result.taskId ?? kwargs.taskId ?? null,
+      taskStatus: result.taskStatus ?? null,
+      projectGroupNo: result.projectGroupNo ?? kwargs.projectGroupNo ?? null,
+      modelName: result.modelName ?? null,
+      modelGroupCode: result.modelGroupCode ?? null,
+      pointCost: result.pointNo ?? null,
+      firstResultUrl: result.firstResultUrl ?? null,
+      resultCount: result.resultCount ?? null,
+      waitedMs: result.waitedMs ?? null,
+      timedOut: result.timedOut ?? null,
+    });
+    return presentTaskWaitResult(result);
+  },
+});
+
+cli({
+  site: SITE,
+  name: 'task-records',
+  description: commandHelp('查看本地任务台账', {
+    examples: [
+      'opencli awb task-records --taskRecordFile .awb/tasks.jsonl',
+      'opencli awb task-records --taskRecordFile .awb/tasks.jsonl --pendingOnly true -f json',
+    ],
+    hint: '这个命令只读本地 JSONL 台账，用于 agent/批量任务恢复上下文；任务真实状态仍以 `tasks` / `task-wait` 查询 AWB 后端为准。',
+  }),
+  browser: false,
+  args: [
+    TASK_RECORD_FILE_ARG,
+    { name: 'taskType', choices: FEED_TASK_TYPES, help: '只看某类任务。示例: IMAGE_CREATE / VIDEO_GROUP' },
+    { name: 'pendingOnly', help: '只看本地台账里尚未记录完成结果的任务。示例: true' },
+    { name: 'limit', type: 'int', default: 100 },
+  ],
+  columns: ['任务ID', '任务类型', '任务状态', '模型', '项目组编号', '首个结果', '记录时间', '事件'],
+  func: async (_page, kwargs) => withAliasesRows(
+    (await loadTaskRecordRows(kwargs)).map((record) => ({
+      ...record,
+      taskStatus: taskStatusLabel(record.taskStatus),
+    })),
+    {
+      taskId: '任务ID',
+      taskType: '任务类型',
+      taskStatus: '任务状态',
+      modelName: '模型',
+      projectGroupNo: '项目组编号',
+      firstResultUrl: '首个结果',
+      recordedAt: '记录时间',
+      event: '事件',
+    },
+  ),
+});
+
+cli({
+  site: SITE,
+  name: 'task-record-poll',
+  description: commandHelp('轮询本地台账里的未完成任务', {
+    examples: [
+      'opencli awb task-record-poll --taskRecordFile .awb/tasks.jsonl -f json',
+      'opencli awb task-record-poll --taskRecordFile .awb/tasks.jsonl --waitSeconds 300 --pollIntervalMs 10000 -f json',
+    ],
+    hint: '读取 `task-records --pendingOnly true` 的结果，查询 AWB 后端，并把 checked/completed 事件追加回同一个 JSONL。默认只查一轮；传 waitSeconds 才持续轮询。',
+  }),
+  browser: false,
+  args: [
+    TASK_RECORD_FILE_ARG,
+    { name: 'taskType', choices: FEED_TASK_TYPES, help: '只轮询某类任务。示例: IMAGE_CREATE / VIDEO_GROUP' },
+    { name: 'projectGroupNo', help: '台账记录缺少项目组时使用的默认项目组编号' },
+    { name: 'pageSize', type: 'int', default: 100 },
+    { name: 'limit', type: 'int', default: 100 },
+    { name: 'waitSeconds', type: 'int', default: 0, help: '持续轮询秒数。0=只查一轮' },
+    { name: 'pollIntervalMs', type: 'int', default: 5000 },
+  ],
+  columns: ['任务ID', '任务类型', '任务状态', '模型', '项目组编号', '首个结果', '是否超时', '事件'],
+  func: async (_page, kwargs) => withAliasesRows(
+    (await pollTaskRecordRows(kwargs)).map((record) => ({
+      ...record,
+      taskStatus: taskStatusLabel(record.taskStatus),
+    })),
+    {
+      taskId: '任务ID',
+      taskType: '任务类型',
+      taskStatus: '任务状态',
+      modelName: '模型',
+      projectGroupNo: '项目组编号',
+      firstResultUrl: '首个结果',
+      timedOut: '是否超时',
+      event: '事件',
+    },
+  ),
 });
 
 cli({
@@ -7146,6 +7363,7 @@ cli({
     { name: 'irefFiles', help: '本地画面参考图路径，多个逗号分隔；CLI 会先自动上传再作为参考图使用' },
     { name: 'waitSeconds', type: 'int', default: 0, help: '提交后额外等待结果秒数。0=只提交。示例: 120' },
     { name: 'pollIntervalMs', type: 'int', default: 5000, help: '等待结果时的轮询间隔毫秒。示例: 5000' },
+    TASK_RECORD_FILE_ARG,
     DRY_RUN_ARG,
   ],
   columns: ['任务ID', '任务状态', '预计积分', '项目组余额', '提交后项目组剩余', '项目组编号', '首个结果'],
@@ -7154,9 +7372,25 @@ cli({
     ensureRequiredArgs('image-create', kwargs, [
       { key: 'prompt', help: '例如 `--prompt "一只小狗"`' },
     ]);
-    return presentTaskCreateResult(
-      toBool(kwargs.dryRun) ? await previewImageCreate(kwargs) : await createImageTask(kwargs),
-    );
+    const result = toBool(kwargs.dryRun) ? await previewImageCreate(kwargs) : await createImageTask(kwargs);
+    if (!toBool(kwargs.dryRun)) {
+      await appendTaskRecord(kwargs, {
+        event: 'submitted',
+        command: 'image-create',
+        taskType: 'IMAGE_CREATE',
+        taskId: result.taskId ?? null,
+        taskStatus: result.taskStatus ?? null,
+        projectGroupNo: result.projectGroupNo ?? kwargs.projectGroupNo ?? null,
+        modelCode: kwargs.modelCode ?? null,
+        modelGroupCode: kwargs.modelGroupCode ?? result.modelGroupCode ?? null,
+        promptSummary: taskPromptSummary(kwargs),
+        pointCost: result.pointCost ?? null,
+        waitSeconds: toInt(kwargs.waitSeconds, 0),
+        firstResultUrl: result.firstResultUrl ?? null,
+        timedOut: result.timedOut ?? null,
+      });
+    }
+    return presentTaskCreateResult(result);
   },
 });
 
@@ -7185,6 +7419,7 @@ cli({
     { name: 'crefFiles', help: '默认本地角色参考图；会自动上传，并给每条任务复用' },
     { name: 'srefFiles', help: '默认本地风格参考图；会自动上传，并给每条任务复用' },
     { name: 'irefFiles', help: '默认本地画面参考图；会自动上传，并给每条任务复用' },
+    TASK_RECORD_FILE_ARG,
     DRY_RUN_ARG,
   ],
   columns: ['序号', '预计积分', '项目组余额', '提交后项目组剩余', '任务ID', '任务状态', '项目组编号', '错误'],
@@ -7243,6 +7478,21 @@ cli({
         throw new Error('Each batch image item must include `prompt`.');
       }
       const result = await createImageTask(merged);
+      await appendTaskRecord(kwargs, {
+        event: 'submitted',
+        command: 'image-create-batch',
+        taskType: 'IMAGE_CREATE',
+        inputIndex: index,
+        taskId: result.taskId ?? null,
+        taskStatus: result.taskStatus ?? null,
+        projectGroupNo: result.projectGroupNo ?? merged.projectGroupNo ?? null,
+        modelCode: merged.modelCode ?? null,
+        modelGroupCode: merged.modelGroupCode ?? result.modelGroupCode ?? null,
+        promptSummary: taskPromptSummary(merged),
+        pointCost: result.pointCost ?? null,
+        firstResultUrl: result.firstResultUrl ?? null,
+        timedOut: result.timedOut ?? null,
+      });
       return {
         inputIndex: index,
         pointCost: result.pointCost ?? null,
@@ -7385,6 +7635,7 @@ cli({
     { name: 'promptParamsJson', help: '高级用法：直接覆盖整个 promptParams JSON。只有想绕过单独参数时再用' },
     { name: 'waitSeconds', type: 'int', default: 0, help: '提交后额外等待结果秒数。0=只提交。示例: 180' },
     { name: 'pollIntervalMs', type: 'int', default: 5000, help: '等待结果时的轮询间隔毫秒。示例: 5000' },
+    TASK_RECORD_FILE_ARG,
     DRY_RUN_ARG,
   ],
   columns: ['任务ID', '任务状态', '预计积分', '项目组余额', '提交后项目组剩余', '项目组编号', '首个结果'],
@@ -7401,9 +7652,25 @@ cli({
         `可先查看模型参数: ${runtimeCommandPrefix()} model-options --modelCode ${kwargs.modelCode} --modelGroupCode ${kwargs.modelGroupCode}`,
       ].join('\n'));
     }
-    return presentTaskCreateResult(
-      toBool(kwargs.dryRun) ? await previewVideoCreate(kwargs) : await createVideoTask(kwargs),
-    );
+    const result = toBool(kwargs.dryRun) ? await previewVideoCreate(kwargs) : await createVideoTask(kwargs);
+    if (!toBool(kwargs.dryRun)) {
+      await appendTaskRecord(kwargs, {
+        event: 'submitted',
+        command: 'video-create',
+        taskType: 'VIDEO_GROUP',
+        taskId: result.taskId ?? null,
+        taskStatus: result.taskStatus ?? null,
+        projectGroupNo: result.projectGroupNo ?? kwargs.projectGroupNo ?? null,
+        modelCode: kwargs.modelCode ?? null,
+        modelGroupCode: kwargs.modelGroupCode ?? result.modelGroupCode ?? null,
+        promptSummary: taskPromptSummary(kwargs),
+        pointCost: result.pointCost ?? null,
+        waitSeconds: toInt(kwargs.waitSeconds, 0),
+        firstResultUrl: result.firstResultUrl ?? null,
+        timedOut: result.timedOut ?? null,
+      });
+    }
+    return presentTaskCreateResult(result);
   },
 });
 
@@ -7453,6 +7720,7 @@ cli({
     { name: 'framesJson', help: '默认直接覆盖整个 frames 数组 JSON；只有做多帧精细控制时再用' },
     { name: 'richTaskPrompt', help: '默认富文本任务提示词；只在单条任务未提供时才会带上' },
     { name: 'promptParamsJson', help: '默认直接覆盖 promptParams JSON；只有普通参数不够时再用' },
+    TASK_RECORD_FILE_ARG,
     DRY_RUN_ARG,
   ],
   columns: ['序号', '预计积分', '项目组余额', '提交后项目组剩余', '任务ID', '任务状态', '项目组编号', '错误'],
@@ -7499,6 +7767,21 @@ cli({
         throw new Error('Each batch video item must include content via `prompt`, `storyboardPrompts`, frame inputs, reference inputs, or `promptParamsJson`.');
       }
       const result = await createVideoTask(merged);
+      await appendTaskRecord(kwargs, {
+        event: 'submitted',
+        command: 'video-create-batch',
+        taskType: 'VIDEO_GROUP',
+        inputIndex: index,
+        taskId: result.taskId ?? null,
+        taskStatus: result.taskStatus ?? null,
+        projectGroupNo: result.projectGroupNo ?? merged.projectGroupNo ?? null,
+        modelCode: merged.modelCode ?? null,
+        modelGroupCode: merged.modelGroupCode ?? result.modelGroupCode ?? null,
+        promptSummary: taskPromptSummary(merged),
+        pointCost: result.pointCost ?? null,
+        firstResultUrl: result.firstResultUrl ?? null,
+        timedOut: result.timedOut ?? null,
+      });
       return {
         inputIndex: index,
         pointCost: result.pointCost ?? null,

@@ -15,6 +15,7 @@
 
 - **团队积分 vs 项目组积分**：团队积分池是总池；项目组额度从 `projectPointMax` 切下来用。
 - **上限而非真实余额**：`projectPointMax` 是上限；`projectPointBalance` 才是当前可用余额。上限为 0 表示无限制（跟随团队池）。
+- **人民币折算**：默认 `1 积分 = 0.1 元`。`usage-summary` 可用 `--pointPriceYuan` 覆盖，但常规场景不需要再手动传。
 - **积分包只发到团队池**：买入 / 兑换都进团队，之后通过 `project-group-update --point N` 把额度分到项目组。
 - **发票走飞书表单**：`invoice-apply` 复用本地 Dia / Chrome 飞书登录态，CLI 不负责登录飞书。
 
@@ -43,13 +44,13 @@
 "$AWB_CMD" usage-summary --projectGroupNo <projectGroupNo> \
   --since "2026-04-27 00:00:00" \
   --startProjectPointBalance 10000 \
-  --pointPriceYuan 0.01 -f json
+  --pointPriceYuan 0.1 -f json
 
 # 后台已注入环境变量时可直接查
 AWB_PROJECT_GROUP_NO=<projectGroupNo> \
 AWB_USAGE_STARTED_AT=1777219200000 \
 AWB_START_PROJECT_POINT_BALANCE=10000 \
-AWB_POINT_PRICE_YUAN=0.01 \
+AWB_POINT_PRICE_YUAN=0.1 \
 "$AWB_CMD" usage-summary -f json
 
 # 提高项目组上限（不改团队池）
@@ -77,7 +78,7 @@ AWB_POINT_PRICE_YUAN=0.01 \
 ## 5. 经验引导
 
 - **"团队够但项目组不够" 是最常见翻车**：先 `points -f json` 对比两个数字；再看 `projectPointMax`——上限低于余额需求也会拒绝创作。用 `project-group-update --point <更大>` 调整。
-- **项目用量统计优先看 `usage-summary`**：任务数按项目组实时拉 `IMAGE_CREATE` / `IMAGE_EDIT` / `VIDEO_GROUP`；积分优先用启动余额减当前余额，没传启动余额时才回退为成功任务 `pointNo` 合计；人民币金额按 `pointPriceYuan` 折算；余额差无法归到任务时会进“未归因积分”。
+- **项目用量统计优先看 `usage-summary`**：任务数按项目组实时拉 `IMAGE_CREATE` / `IMAGE_EDIT` / `VIDEO_GROUP`；积分优先用启动余额减当前余额，没传启动余额时才回退为成功任务 `pointNo` 合计；人民币金额默认按 `pointPriceYuan=0.1` 折算；余额差无法归到任务时会进“未归因积分”。
 - **`point-purchase` 渲染的是微信二维码**：终端要能渲染（`--qrSize 28~32` 调大）。如果 SSH 里显示糊，直接把返回 JSON 里的二维码链接在浏览器打开扫。
 - **`--waitSeconds 120` 只阻塞本进程**：支付可以在手机上完成；脚本阻塞期间不要打断，或用 `point-pay-status` 异步模式。
 - **`redeem` 只进团队池**：个人 / 项目组维度不会变化；兑换后通常还要 `project-group-update --point` 再分配。

@@ -55,10 +55,14 @@ fi
 - 默认输出格式 `-f json`；长输出用 `jq` 摘要，不要把整段 JSON 或整张模型表回显给用户
 - 用 `--model "<关键词>"` 缩小模型表，别先扫全量
 - 创作命令优先 `image-fee` / `video-fee` 预算；只有结构复杂时再用 `--dryRun true`
+- **创作前必须确认**：除非用户已经明确说“直接生成 / 不用确认 / 自动跑 / 批量全部提交”，正式 `image-create` / `video-create` / `*-batch` 前必须先把模型组、通道/折扣、关键参数、最终提示词/参考素材、预估积分、项目组余额、等待策略汇总给用户确认。低费用也不能替代确认。
+- **参数不能替用户静默定档**：如果用户没明确给出，提交前要问清或给出默认建议并等待确认：生图 `ratio`、`quality`（如 `1K/2K/4K`）、`generateNum`；生视频 `ratio`、`quality`（如 `720/1080`）、`generatedTime`、是否音频 / 音效 / 主体引用。
+- **不要替用户静默选贵通道**：同一模型有标准 / Fast / Discount / Pro / 1080p 等通道时，先说明差异并默认选便宜试片通道；效果优先或高规格交付必须得到用户确认。
 - 参数以 `paramKeys` 为准；不在白名单的参数不传（GPT Image 2 无 `quality` / `generateNum`；千问无 `ratio`；FLUX 用 `customResolution`）
 - 破坏性 / 写入命令（`auth-clear`、`team-select`、`project-group-*`、`redeem`、`invoice-apply`）支持 `--dryRun true`，没把握时先预览
 - 涉及项目组积分的操作（所有创作命令、`points`、`tasks`）默认挂当前项目组；可用 `--projectGroupNo` 覆盖
 - 创作失败先看项目组而非团队（`project-group-current` + `points`）
+- **等待默认策略**：单张图可同步等短窗口（如 90–180 秒）；视频、Token 计费、高复杂度和批量任务默认异步提交。异步/批量提交时加 `--taskRecordFile .awb/tasks.jsonl`，保存 taskId 后再 `task-wait` / `tasks` 查询。`task-wait` 超时只代表本次轮询结束，不代表任务失败。
 
 ## 5. 版本与更新
 

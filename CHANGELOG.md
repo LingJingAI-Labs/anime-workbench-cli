@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9 - 2026-04-27
+
+- Add explicit pre-submit confirmation rules for AWB generation: model channel, prompt, references, cost, wait strategy, image ratio / 1K-2K-4K quality, image count, video ratio / 720-1080 quality, duration, audio, and subject references.
+- Add local task record support via `--taskRecordFile`, plus `task-records` and `task-record-poll` for async/batch task recovery.
+- Document async-first task handling for video, long image, token-priced, and batch jobs.
+- Use the task execution statistics dashboard for average duration estimates and default usage summaries to `1` point = `0.1` yuan.
+
 ## 0.1.7 - 2026-04-26
 
 - Add AWB skill guidance for真人短剧生产流：主体 / 人设图 + 场景图 + 可选音色的参考生视频默认路线。
