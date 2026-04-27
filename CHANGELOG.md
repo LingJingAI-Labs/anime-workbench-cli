@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.19 - 2026-04-27
+
+- Tighten AWB skill wording so Kling / Grok / other ordinary reference-video routes are described as ordinary persona-image references, not reusable subject assets.
+- Split shotboard guidance so Seedance 2.0 `--refSubjects` guidance is physically separate from ordinary reference-model lists.
+
 ## 0.1.18 - 2026-04-27
 
 - Clarify that `subject-publish` / `subject-upload` / 加白 / `--refSubjects` is the Seedance 2.0 subject-asset workflow, while ordinary reference models should use `--refImageFiles` / `--refImageUrls`.

@@ -59,9 +59,9 @@
 
 ### 自动化默认路线（短剧 / 多参考 / 主体）
 
-自动化生成短剧片段时，最常见不是纯 prompt 或首尾帧，而是**参考生视频**：人物主体 / 人物形象图 + 场景图 + 可选音色。默认按这个顺序决策：
+自动化生成短剧片段时，最常见不是纯 prompt 或首尾帧，而是**参考生视频**：Seedance 2.0 主体资产或普通人物形象图 + 场景图 + 可选音色。默认按这个顺序决策：
 
-1. **已有主体 / 多段复用**：用 `--refSubjects "角色=asset-..."` 引用人物主体；场景用 `--refImageFiles` / `--refImageUrls`。
+1. **Seedance 2.0 已有主体 / 多段复用**：用 `--refSubjects "角色=asset-..."` 引用人物主体；场景用 `--refImageFiles` / `--refImageUrls`。
 2. **只有人物形象图**：如果选 Seedance 2.0，先问是否要做成可复用主体；做剧、多镜头、同角色复用时先 `subject-publish`，试片或普通参考模型才直接 `--refImageFiles`。
 3. **要控音色**：上传 / 引用音频，用 `--refAudioFiles` / `--refAudioUrls`，左值绑定到同名人物主体或图片；异名用 `名称@绑定目标=文件` 或 `--refAudiosJson bindTo`。
 4. **要控镜头切换**：先用 Banana Pro / Nano Banana / GPT Image 2 出 4 / 9 宫格分镜指挥图，再把它作为一张参考图传给视频模型。
@@ -128,7 +128,7 @@
 
 用户说“真人”“短剧”“控制音色 / 说话 / 对口型”时，不要只推荐 `--refImageFiles` 一步法。先把路线讲清楚：
 
-1. **模型选择**：效果优先 Seedance 2.0（默认 720p，1080p 太贵时先提醒）；成本 / 速度优先 Seedance 2.0 Fast；便宜试片可考虑 Grok；可灵 3.0 / 3.0-Omni 也可做主体 / 多参考，但音色引用链路更麻烦。“音效开关”只代表自动配乐 / 音效，不等于控音色。
+1. **模型选择**：效果优先 Seedance 2.0（默认 720p，1080p 太贵时先提醒）；成本 / 速度优先 Seedance 2.0 Fast；便宜试片可考虑 Grok；可灵 3.0 / 3.0-Omni 可做多参考 / 故事板，但人物一致性走普通人设图参考，音色引用链路更麻烦。“音效开关”只代表自动配乐 / 音效，不等于控音色。
 2. **角色一致性优先路径**：Seedance 2.0 真人角色图先走 `subject-publish` / `subject-upload` 发布为主体（也就是平台加白 / 可引用资产链路），拿返回的 `nextRefSubject` 填 `--refSubjects`。其他普通参考模型不要走这条，用 `--refImageFiles` / `--refImageUrls`。
 3. **场景图路径**：场景不是主体，通常直接 `--refImageFiles "场景=./scene.webp"`，或先 `upload-files --sceneType material-video-create` 后用 `--refImageUrls` 复用。
 4. **一次性备选路径**：如果只是试片、账号无主体权限、或用户明确说“不上传 / 直接传 webp”，可以直接 `--refImageFiles "小莉=./person.webp,咖啡馆=./scene.webp"`；但要提醒这不是可复用主体，跨片一致性弱于 `--refSubjects`。
@@ -139,7 +139,7 @@
 
 - **Seedance 2.0**：目前效果最好、最贵；默认推荐 `720p`，`1080p` 只在预算允许时上。
 - **Seedance 2.0 Fast**：自动化批量更常用，便宜 / 快，但质量会降。
-- **可灵 3.0 / 3.0-Omni**：可以用主体 / 多参考，Omni 也常用于更复杂参考；如果要控音色，必须确认 `model-options` 与 CLI 生成的 `multi_param + audio` 结构，不要只传 `--audio true`。
+- **可灵 3.0 / 3.0-Omni**：可以用多参考 / 故事板，Omni 也常用于更复杂参考；如果要控音色，必须确认 `model-options` 与 CLI 生成的 `multi_param + audio` 结构，不要只传 `--audio true`。
 - **Grok**：便宜备选，可用于试片或低成本普通参考生成，不要承诺稳定口型 / 音色效果。
 
 推荐流程（可复用真人主体 + 场景图 + 音频）：
@@ -186,7 +186,7 @@ NEXT_REF=$("$AWB_CMD" subject-publish --name 小莉 \
 典型输入组合：
 
 - `分镜指挥图`：来自 Banana Pro / Nano Banana / GPT Image 2 的 4 / 9 宫格图，用来控制镜头顺序、构图和节奏。
-- `人物主体 / 人设图`：Seedance 2.0 用 `--refSubjects` 最稳；其他普通参考模型或试片可用 `--refImageFiles`。
+- `Seedance 2.0 主体资产 / 普通人设图`：Seedance 2.0 用 `--refSubjects` 最稳；其他普通参考模型或试片可用 `--refImageFiles`。
 - `场景图`：继续单独作为命名图片参考，别只依赖分镜图里的小场景。
 - `音色`：需要控音色时继续 `--refAudioFiles` / `--refAudioUrls` 绑定到同名人物。
 

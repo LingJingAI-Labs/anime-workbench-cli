@@ -90,7 +90,8 @@
 
 ### 4.5 分镜指挥图（给视频参考模型控镜头切换）
 
-用 Banana Pro / Nano Banana / GPT Image 2 这类生图模型，基于人物图和场景图先生成**一张** 4 宫格 / 9 宫格分镜图。后续把这张图作为 `分镜指挥图`，再和人物主体 / 人设图 / 场景图一起传给 Seedance、可灵、Grok、Veo、Vidu、PixVerse 等参考生视频模型。详细流程见 [`../references/shotboard-reference-image.md`](../references/shotboard-reference-image.md)。
+用 Banana Pro / Nano Banana / GPT Image 2 这类生图模型，基于人物图和场景图先生成**一张** 4 宫格 / 9 宫格分镜图。后续把这张图作为 `分镜指挥图`，再和普通人设图 / 场景图一起传给 Seedance、可灵、Grok、Veo、Vidu、PixVerse 等参考生视频模型。
+只有 Seedance 2.0 主体资产路线才额外使用 `--refSubjects`。详细流程见 [`../references/shotboard-reference-image.md`](../references/shotboard-reference-image.md)。
 
 ```bash
 "$AWB_CMD" image-create --modelGroupCode Nano_Banana2_ImageCreate_Group_Discount \
