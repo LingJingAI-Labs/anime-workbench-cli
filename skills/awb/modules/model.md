@@ -54,7 +54,8 @@
 ## 5. 经验引导
 
 - **永远先查 `paramKeys`**：它是真相之源。举例：
-  - `GPT Image 2` → `ratio,iref,prompt`：**没有** `quality` / `generateNum`
+  - `GPT2_ImageCreate_Discount_Group` → `ratio,iref,prompt`：折扣组，**没有** `quality` / `generateNum`，比例枚举更全
+  - `GPT2_ImageCreate_Group` → `ratio,quality,iref,prompt`：默认组，支持 `1K/2K/4K`，但仍**没有** `generateNum`
   - `千问` → `direct_generate_num,iref,prompt`：**没有** `ratio`，用 `--directGenerateNum`
   - `FLUX 1.1 Pro` → `ratio,customResolution,prompt_upsampling,seed,prompt`：用 `--customResolution`，不走 `quality`
   - `Nano Banana 2` → `quality,ratio,generate_num,iref,prompt`：支持多图返回

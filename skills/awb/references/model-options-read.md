@@ -32,7 +32,8 @@
 
 | 模型 | `paramKeys` | 关键推论 |
 |------|-------------|----------|
-| GPT Image 2 | `ratio,iref,prompt` | 无 `quality` / `generateNum`；只 `iref` 参考 |
+| GPT Image 2 折扣组（`GPT2_ImageCreate_Discount_Group`） | `ratio,iref,prompt` | 无 `quality` / `generateNum`；比例枚举更全；只 `iref` 参考 |
+| GPT Image 2 默认组（`GPT2_ImageCreate_Group`） | `ratio,quality,iref,prompt` | 支持 `1K/2K/4K`；无 `generateNum`；只 `iref` 参考 |
 | 千问 | `direct_generate_num,iref,prompt` | 无 `ratio`；用 `--directGenerateNum` |
 | Nano Banana 2 | `quality,ratio,generate_num,iref,prompt` | 支持多图返回（`--generateNum`） |
 | FLUX 1.1 Pro | `ratio,customResolution,prompt_upsampling,seed,prompt` | 用 `--customResolution`、`--seed`；无 `quality` |

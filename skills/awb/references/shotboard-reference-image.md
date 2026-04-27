@@ -25,12 +25,17 @@
   --waitSeconds 120 -f json
 ```
 
-GPT Image 2 一类参数缩减模型不带 `quality` / `generateNum`：
+GPT Image 2 折扣组不带 `quality` / `generateNum`；如果需要 2K / 4K，换默认组 `GPT2_ImageCreate_Group` 并只加 `--quality`：
 
 ```bash
 "$AWB_CMD" image-create --modelGroupCode GPT2_ImageCreate_Discount_Group \
   --prompt "参考图1是人物小莉，参考图2是咖啡馆场景。生成一张4宫格短剧分镜指挥图，整体16:9横屏；四格依次是建立镜头、人物中景、情绪特写、离开背影；保持人物和场景一致，无字幕无水印。" \
   --ratio 16:9 --irefFiles "./person.webp,./scene.webp" \
+  --waitSeconds 120 -f json
+
+"$AWB_CMD" image-create --modelGroupCode GPT2_ImageCreate_Group \
+  --prompt "参考图1是人物小莉，参考图2是咖啡馆场景。生成一张4宫格短剧分镜指挥图，整体9:16竖屏；四格依次是建立镜头、人物中景、情绪特写、离开背影；保持人物和场景一致，无字幕无水印。" \
+  --quality 2k --ratio 9:16 --irefFiles "./person.webp,./scene.webp" \
   --waitSeconds 120 -f json
 ```
 

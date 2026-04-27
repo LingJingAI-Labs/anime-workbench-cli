@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.20 - 2026-04-27
+
+- Document the two GPT Image 2 groups separately: `GPT2_ImageCreate_Discount_Group` has no `quality` / `generateNum`, while `GPT2_ImageCreate_Group` supports `quality` but still has no `generateNum`.
+- Update image and shotboard skill examples so agents choose the default GPT Image 2 group when users ask for 2K / 4K output.
+- Make `image-models` / `model-options` preview commands respect image model `paramKeys`, so GPT Image 2 hints no longer suggest unsupported `quality` or `generateNum` flags.
+
 ## 0.1.19 - 2026-04-27
 
 - Tighten AWB skill wording so Kling / Grok / other ordinary reference-video routes are described as ordinary persona-image references, not reusable subject assets.

@@ -62,14 +62,19 @@
   --iref "/material/20260423/xxx.webp" --waitSeconds 120 -f json
 ```
 
-### 4.2 GPT Image 2（参数缩减）
+### 4.2 GPT Image 2（两个分组）
 
-`paramKeys=ratio,iref,prompt`，**不带** `--quality` / `--generateNum`：
+- `GPT2_ImageCreate_Discount_Group`（折扣）：`paramKeys=ratio,iref,prompt`，不带 `--quality` / `--generateNum`；比例枚举更全，适合便宜试片 / 分镜草稿。
+- `GPT2_ImageCreate_Group`（默认）：`paramKeys=ratio,quality,iref,prompt`，可带 `--quality 1k|2k|4k`；仍不带 `--generateNum`，适合正式质量控制。
 
 ```bash
 "$AWB_CMD" image-create --modelGroupCode GPT2_ImageCreate_Discount_Group \
   --prompt "赛博朋克少女，霓虹街头，电影感" --ratio 16:9 \
   --irefFiles "./ref.webp" --waitSeconds 120 -f json
+
+"$AWB_CMD" image-create --modelGroupCode GPT2_ImageCreate_Group \
+  --prompt "赛博朋克少女，霓虹街头，电影感" --ratio 9:16 \
+  --quality 2k --irefFiles "./ref.webp" --waitSeconds 120 -f json
 ```
 
 ### 4.3 千问（无 ratio，用 directGenerateNum）
@@ -100,7 +105,7 @@
   --irefFiles "./person.webp,./scene.webp" --waitSeconds 120 -f json
 ```
 
-GPT Image 2 这类参数缩减模型不要带 `quality` / `generateNum`：
+GPT Image 2 折扣组不要带 `quality` / `generateNum`；如果需要 2K / 4K，换默认组并只加 `quality`，不要加 `generateNum`：
 
 ```bash
 "$AWB_CMD" image-create --modelGroupCode GPT2_ImageCreate_Discount_Group \
@@ -122,10 +127,10 @@ GPT Image 2 这类参数缩减模型不要带 `quality` / `generateNum`：
 
 ## 5. 经验引导
 
-- **先 `model-options`，后创作**：别把 Nano Banana 的默认 `--quality 1K --ratio 16:9 --generateNum 1` 直接套到 GPT Image 2 / Midjourney / 千问—— `paramKeys` 里没有的参数传了会报错。
+- **先 `model-options`，后创作**：别把 Nano Banana 的默认 `--quality 1K --ratio 16:9 --generateNum 1` 直接套到 GPT Image 2 / Midjourney / 千问—— `paramKeys` 里没有的参数传了会报错。GPT Image 2 默认组支持 `quality`，折扣组不支持；两个组都不支持 `generateNum`。
 - **`image-fee` 优先于裸 `--dryRun`**：前者已经包含预估积分 + 项目组余额 + 提交后剩余；`--dryRun true` 适合结构很复杂（故事板 / 多参考）时再核对整段 payload。
 - **确认不是费用大小决定的**：即使只花 1 积分，也要先展示最终 prompt / 模型通道 / 参数并等用户确认，除非用户明确授权自动提交。
-- **没给清晰度 / 比例就不要静默提交**：先问用户，或明确建议默认值（如试片 `1K`、竖屏 `9:16` / 横屏 `16:9`）并等待确认；GPT Image 2 这类不支持 `quality` 的模型要说明“不能选 2K/4K 档”。
+- **没给清晰度 / 比例就不要静默提交**：先问用户，或明确建议默认值（如试片 `1K`、竖屏 `9:16` / 横屏 `16:9`）并等待确认；GPT Image 2 折扣组不能选 2K/4K 档，默认组可以选 `1K/2K/4K`。
 - **`--waitSeconds 120` 的边界**：生图一般几十秒；写大了是安全的。超时也不扣积分重试——`task-wait` 后续兜底。
 - **异步台账**：不等结果或批量提交时加 `--taskRecordFile .awb/tasks.jsonl`；后续用 `task-record-poll` 批量恢复，或 `task-wait` 单个等待，并带同一个参数把结果追加回台账。
 - **`generateNum` 是"最终返回几张"**：不是所有模型都支持，以 `paramKeys` 为准；千问用 `--directGenerateNum`。

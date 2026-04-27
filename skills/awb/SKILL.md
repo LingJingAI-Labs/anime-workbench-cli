@@ -59,7 +59,7 @@ fi
 - **创作前必须确认**：除非用户已经明确说“直接生成 / 不用确认 / 自动跑 / 批量全部提交”，正式 `image-create` / `video-create` / `*-batch` 前必须先把模型组、通道/折扣、关键参数、最终提示词/参考素材、预估积分、项目组余额、等待策略汇总给用户确认。低费用也不能替代确认。
 - **参数不能替用户静默定档**：如果用户没明确给出，提交前要问清或给出默认建议并等待确认：生图 `ratio`、`quality`（如 `1K/2K/4K`）、`generateNum`；生视频 `ratio`、`quality`（如 `720/1080`）、`generatedTime`、是否音频 / 音效 / 主体引用。
 - **不要替用户静默选贵通道**：同一模型有标准 / Fast / Discount / Pro / 1080p 等通道时，先说明差异并默认选便宜试片通道；效果优先或高规格交付必须得到用户确认。
-- 参数以 `paramKeys` 为准；不在白名单的参数不传（GPT Image 2 无 `quality` / `generateNum`；千问无 `ratio`；FLUX 用 `customResolution`）
+- 参数以 `paramKeys` 为准；不在白名单的参数不传（GPT Image 2 折扣组无 `quality` / `generateNum`，默认组有 `quality` 但仍无 `generateNum`；千问无 `ratio`；FLUX 用 `customResolution`）
 - 破坏性 / 写入命令（`auth-clear`、`team-select`、`project-group-*`、`redeem`、`invoice-apply`）支持 `--dryRun true`，没把握时先预览
 - 涉及项目组积分的操作（所有创作命令、`points`、`tasks`）默认挂当前项目组；可用 `--projectGroupNo` 覆盖
 - 创作失败先看项目组而非团队（`project-group-current` + `points`）

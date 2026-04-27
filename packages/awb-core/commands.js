@@ -3628,14 +3628,30 @@ function videoModelSupportsPromptOnly(modelRow) {
   return modelRow?.supportsPromptOnly === true;
 }
 
+function modelParamKeySet(modelRow) {
+  return new Set(String(modelRow?.paramKeys ?? '').split(',').map((item) => item.trim()).filter(Boolean));
+}
+
+function buildImagePreviewArgs(modelRow) {
+  const keys = modelParamKeySet(modelRow);
+  const args = [];
+  if (keys.has('quality')) args.push('--quality <quality>');
+  if (keys.has('ratio')) args.push('--ratio <ratio>');
+  if (keys.has('generate_num')) args.push('--generateNum 1');
+  if (keys.has('direct_generate_num')) args.push('--directGenerateNum 1');
+  return args.join(' ');
+}
+
 function buildModelPreviewCommand(kind, modelRow) {
   const groupCode = modelRow?.modelGroupCode ?? '<modelGroupCode>';
   const modelCode = String(modelRow?.modelCode ?? modelRow?.modelGroupCode ?? '');
   if (kind === 'image') {
+    const imageArgs = buildImagePreviewArgs(modelRow);
+    const suffix = imageArgs ? ` ${imageArgs}` : '';
     if (String(modelRow?.refFeature ?? '').includes('iref')) {
-      return `${runtimeCommandPrefix()} image-create --modelGroupCode ${groupCode} --prompt "参考图里的角色在雨夜奔跑" --quality <quality> --ratio <ratio> --generateNum 1 --irefFiles "./a.webp" --dryRun true`;
+      return `${runtimeCommandPrefix()} image-create --modelGroupCode ${groupCode} --prompt "参考图里的角色在雨夜奔跑"${suffix} --irefFiles "./a.webp" --dryRun true`;
     }
-    return `${runtimeCommandPrefix()} image-create --modelGroupCode ${groupCode} --prompt "一只小狗" --quality <quality> --ratio <ratio> --generateNum 1 --dryRun true`;
+    return `${runtimeCommandPrefix()} image-create --modelGroupCode ${groupCode} --prompt "一只小狗"${suffix} --dryRun true`;
   }
 
   if (videoModelSupportsPromptOnly(modelRow)) {
@@ -6337,9 +6353,11 @@ function buildModelModeExamples(kind, modelRow, rowByKey = new Map()) {
   const examples = [];
 
   if (kind === 'image') {
-    examples.push(`基础预演: ${runtimeCommandPrefix()} image-create --modelGroupCode ${modelGroupCode} --prompt "一只小狗" --quality <quality> --ratio <ratio> --generateNum 1 --dryRun true`);
+    const imageArgs = buildImagePreviewArgs(modelRow);
+    const suffix = imageArgs ? ` ${imageArgs}` : '';
+    examples.push(`基础预演: ${runtimeCommandPrefix()} image-create --modelGroupCode ${modelGroupCode} --prompt "一只小狗"${suffix} --dryRun true`);
     if (String(modelRow?.refFeature ?? '').includes('iref')) {
-      examples.push(`参考图预演: ${runtimeCommandPrefix()} image-create --modelGroupCode ${modelGroupCode} --prompt "参考图里的角色在雨夜奔跑" --quality <quality> --ratio <ratio> --generateNum 1 --irefFiles "./a.webp" --dryRun true`);
+      examples.push(`参考图预演: ${runtimeCommandPrefix()} image-create --modelGroupCode ${modelGroupCode} --prompt "参考图里的角色在雨夜奔跑"${suffix} --irefFiles "./a.webp" --dryRun true`);
     }
     return examples;
   }
