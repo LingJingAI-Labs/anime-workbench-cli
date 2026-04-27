@@ -1,8 +1,8 @@
 # subject-publish / subject-upload — 完整流程
 
-`subject-publish` / `subject-upload` 把一个角色 / 真人登记为**可复用主体**，让后续视频命令用 `@角色名` + `--refSubjects "角色=asset-..."` 稳定引用，而不是每次重新传原图。它既可以吃本地文件，也可以直接吃 `upload-files` 产出的 backendPath。默认推荐 `subject-publish`，因为它会优先用安全代码名做发布名。
+`subject-publish` / `subject-upload` 把一个角色 / 真人登记为 Seedance 2.0 的**可复用主体**，让后续视频命令用 `@角色名` + `--refSubjects "角色=asset-..."` 稳定引用，而不是每次重新传原图。它既可以吃本地文件，也可以直接吃 `upload-files` 产出的 backendPath。默认推荐 `subject-publish`，因为它会优先用安全代码名做发布名。
 
-> **需有权限账号**。若当前账号可用，真人主体参考生视频优先走这条；无权限时再退回 [`upload-files`](../modules/upload.md) + `refImageUrls`。
+> **需有权限账号**。若当前账号可用，Seedance 2.0 真人主体参考生视频优先走这条；无权限或使用其他普通参考模型时，再退回 [`upload-files`](../modules/upload.md) + `refImageUrls` / `refImageFiles`。
 
 ## 1. 参数矩阵
 
@@ -118,7 +118,7 @@ NEXT_REF=$("$AWB_CMD" subject-upload --name 小莉 --primaryFile ./front.webp \
 - **`--groupName` 是逃生口**：想完全手控组名（比如跨项目共享一组）用它；一般别用，自动拼接够清晰。
 - **`--faceFile` / `--sideFile` / `--backFile` 能明显提升一致性**：视频里转镜、换角度时尤其有用；只传 `primaryFile` 时镜头一转人脸容易崩。
 - **已在 COS 的素材用 URL 版本**：避免重复上传；`primaryUrl` 可接平台内部 `/material/...` 或 `https://...` 完整 URL。
-- **`subject-publish` / `subject-upload` 是真人主体最佳路径（前提是账号有权限）**：它最终返回 `subjectId` / `nextRefSubject`，最适合 Seedance 2.0 / Grok 这类 `--refSubjects` 工作流。若账号无权限，再退回普通 `upload-files` + `refImageUrls`。
+- **`subject-publish` / `subject-upload` 是 Seedance 2.0 真人主体最佳路径（前提是账号有权限）**：它最终返回 `subjectId` / `nextRefSubject`，用于 Seedance 2.0 的 `--refSubjects` 工作流。其他普通参考模型不要走加白主体链路，若账号无权限或模型不支持主体引用，再退回普通 `upload-files` + `refImageUrls` / `refImageFiles`。
 
 ## 7. 批量主体注册（agent 推荐）
 

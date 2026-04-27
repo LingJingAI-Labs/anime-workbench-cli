@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.18 - 2026-04-27
+
+- Clarify that `subject-publish` / `subject-upload` / 加白 / `--refSubjects` is the Seedance 2.0 subject-asset workflow, while ordinary reference models should use `--refImageFiles` / `--refImageUrls`.
+- Update CLI help and AWB skill docs so agents do not present ordinary reference models as part of the subject publish / 加白 path.
+
 ## 0.1.17 - 2026-04-27
 
 - Load user-level env files for AWB / AiHubMix credentials, including simple `export AIHUBMIX_KEY=...` lines in `~/.zshrc`, without executing shell scripts.

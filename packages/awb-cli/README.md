@@ -45,6 +45,6 @@ node bin/awb.js upload-files --files ./char.webp --sceneType material-video-crea
 # 2) 再把 backendPath 注册成主体 asset id
 node bin/awb.js subject-publish --name 小莉 --primaryUrl /material/video-create/xxx-char.webp -f json
 
-# 3) 最后在 Seedance / Grok 里用 --refSubjects
+# 3) 最后在 Seedance 2.0 里用 --refSubjects；其他普通参考模型用 --refImageFiles / --refImageUrls
 node bin/awb.js video-create --modelGroupCode JiMeng_Seedance_2_Fast_VideoCreate_Group --prompt "@小莉 对镜说话" --refSubjects "小莉=asset-xxx" --quality 720 --generatedTime 5 --ratio 9:16
 ```

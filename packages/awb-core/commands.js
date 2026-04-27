@@ -7819,7 +7819,7 @@ cli({
     quickStart: [
       '这条命令只负责把素材放进 AWB 素材池，不负责火山加白/外部发布。',
       '生图复用看 `素材路径`；生视频复用优先看 `复用写法`（通常是 `--refImageUrls` / `--refVideoUrls`）。',
-      '如果是要给 Seedance 2.0 / Grok / 真人主体参考生视频，图片上传后优先继续看 `主体注册写法`，把 backendPath 注册成 `subjectId` 再走 `--refSubjects`。',
+      '如果是要给 Seedance 2.0 真人主体参考生视频，图片上传后可继续看 `主体注册写法`，把 backendPath 注册成 `subjectId` 再走 `--refSubjects`；其他普通参考模型仍用 `--refImageUrls` / `--refImageFiles`。',
     ],
     examples: [
       'opencli awb upload-files --files ./ref.png',
@@ -7923,18 +7923,18 @@ cli({
 cli({
   site: SITE,
   name: 'subject-publish',
-  description: commandHelp('发布真人/角色图片为可复用主体资产，返回 Seedance/Grok 可直接使用的 subjectId', {
+  description: commandHelp('发布真人/角色图片为 Seedance 2.0 可复用主体资产，返回可直接使用的 subjectId', {
     quickStart: [
       '1. 本地真人图可直接用 `--primaryFile`；如果已经先 `upload-files`，就改用 `--primaryUrl`',
       '1.1 默认会给素材组名/素材名生成安全代码，避免直接拿敏感人设词去碰审核；需要自定义时传 `--publishCode`。',
       '2. 成功后直接复制返回的 `引用写法`（`nextRefSubject`）',
-      '3. 在 Seedance 2.0 / Grok 参考生视频里，用 `--refSubjects` 而不是 `--refImageUrls`',
+      '3. 在 Seedance 2.0 主体参考生视频里，用 `--refSubjects` 而不是 `--refImageUrls`；其他普通参考模型不要走主体加白链路',
     ],
     examples: [
       'opencli awb subject-publish --name 小莉 --primaryFile ./front.webp -f json',
       'opencli awb subject-publish --name 小莉 --primaryUrl /material/video-create/xxx-char.webp -f json',
     ],
-    hint: '这是给真人主体参考生视频准备 `asset-xxx` 的首选命令。常见链路是：`upload-files --sceneType material-video-create` → `subject-publish --primaryUrl <backendPath>` → `video-create --refSubjects "角色=asset-xxx"`。',
+    hint: '这是给 Seedance 2.0 真人主体参考生视频准备 `asset-xxx` 的首选命令。常见链路是：`upload-files --sceneType material-video-create` → `subject-publish --primaryUrl <backendPath>` → `video-create --refSubjects "角色=asset-xxx"`。',
     dryRun: true,
   }),
   browser: false,
@@ -7946,12 +7946,12 @@ cli({
 cli({
   site: SITE,
   name: 'subject-publish-batch',
-  description: commandHelp('批量发布真人/角色图片为可复用主体资产，返回可直接喂给 Seedance/Grok 的引用写法', {
+  description: commandHelp('批量发布真人/角色图片为 Seedance 2.0 可复用主体资产，返回可直接喂给 Seedance 的引用写法', {
     examples: [
       'opencli awb subject-publish-batch --inputFile ./subject-batch.json --dryRun true -f json',
       'opencli awb subject-publish-batch --inputFile ./subject-batch.json --projectName default -f json',
     ],
-    hint: '适合 agent / 沙箱断线场景：先批量把真人图或已上传 backendPath 注册成主体 asset id，再把返回的 `引用写法` 批量喂给 `video-create --refSubjects`。单条优先字段：`name`、`primaryFile` / `primaryUrl`，可选 `face*` / `side*` / `back*`。',
+    hint: '适合 agent / 沙箱断线场景：先批量把真人图或已上传 backendPath 注册成 Seedance 2.0 主体 asset id，再把返回的 `引用写法` 批量喂给 `video-create --refSubjects`。单条优先字段：`name`、`primaryFile` / `primaryUrl`，可选 `face*` / `side*` / `back*`。',
     dryRun: true,
   }),
   browser: false,
