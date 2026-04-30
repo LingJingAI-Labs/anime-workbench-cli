@@ -60,3 +60,4 @@
 - 单个短视频可以短窗口等待；几分钟以上、Token 计费、高复杂度和批量任务默认异步。
 - 正式提交建议加 `--taskRecordFile .awb/tasks.jsonl`，便于沙箱关闭后恢复查询；台账不是后端查询的必要条件，但能避免回来后靠时间和 prompt 反找。
 - 批量先 `--dryRun true`，确认条数、模型通道、公共参数、预估总费用、最低剩余余额、并发数和查询策略后再提交。
+- **前序结果直接当参考素材**：上一次 `image-create` / `video-create` / `tasks` 拿到的结果 COS 链接可以直接用作 `--refImageUrls` / `--refVideoUrls` / `--frameUrl` / `--tailFrameUrl` 等 URL 字段，不需要下载再 `upload-files`；只有 `seedance-subtitle-remove` 这种需要火山 / Seedance 原始链接的命令才必须用源链接。详见 [`upload.md`](upload.md) 的"复用前序任务结果链接"。

@@ -15,6 +15,7 @@
 ## 2. 普通素材经验
 
 - 已有 backendPath / URL 时直接复用，避免重复上传。
+- **复用前序任务结果链接**：`image-create` / `video-create` / `tasks` / `task-wait` 返回的结果 COS 链接（公网可访问）可以直接作为后续命令的 `--refImageUrls` / `--refVideoUrls` / `--refAudioUrls` / `--frameUrl` / `--tailFrameUrl` / `--framesJson` 等 URL 字段输入，不需要先下载再 `upload-files`。仅在链接已过期、要长期归档、或目标命令明确要求原始平台链接（如 `seedance-subtitle-remove` 必须用火山 / Seedance 原始结果链接，不是 AWB 转存）时才重新上传。
 - 本地图片上传前 CLI 会默认转 webp 并尽量压到 10MB 内；最终格式和大小限制仍以 `model-options` 为准。
 - 视频、音频素材不要假设所有模型都能吃；先看目标模型参考模式和参数白名单。
 - 对用户沟通时说“参考图片 / 场景参考 / 音频参考”，内部字段只在写命令时使用。

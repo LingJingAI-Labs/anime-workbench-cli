@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.26 - 2026-04-30
+
+- Document that result COS URLs returned by prior `image-create` / `video-create` / `tasks` runs can be reused directly via `--refImageUrls` / `--refVideoUrls` / `--refAudioUrls` / `--frameUrl` / `--tailFrameUrl` / `--framesJson`, without re-downloading and `upload-files`.
+- Cross-link the new guidance from `image.md` and `video.md` so agents see it in the relevant module without having to read upload notes first.
+
 ## 0.1.25 - 2026-04-30
 
 - Align Grok official video behavior with its current two modes: single image uses first-image video with source aspect ratio, while two or more images use multi-reference with selectable ratio.
